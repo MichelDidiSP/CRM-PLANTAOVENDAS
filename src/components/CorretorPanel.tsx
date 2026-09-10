@@ -9,7 +9,7 @@ type Props = {
 };
 
 export default function CorretorPanel({ brokers }: Props) {
-  const { getCurrentTime, simulatedTime } = useSim();
+  const { getCurrentTime, clockDisplay } = useSim();
   const [showAdd, setShowAdd] = useState(false);
   const [newName, setNewName] = useState('');
   const [newAgency, setNewAgency] = useState<Agency>('Viva Imóveis');
@@ -76,11 +76,9 @@ export default function CorretorPanel({ brokers }: Props) {
         <p className="text-sm text-slate-300">
           <strong className="text-white">Limite para sorteio:</strong> 08:45:59. Corretores que chegam após este horário
           perdem prioridade na fila e vão para o final.
-          {simulatedTime && (
-            <span className="block mt-1 text-amber-400">
-              Hora simulada activa: {simulatedTime} — a marcação de presença usa esta hora.
-            </span>
-          )}
+          <span className="block mt-1 text-amber-400">
+            Relógio do plantão: {clockDisplay} — a marcação de presença usa esta hora.
+          </span>
         </p>
       </div>
 

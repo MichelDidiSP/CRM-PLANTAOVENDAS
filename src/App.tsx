@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { Building2, DoorOpen, Tv, Users, ListOrdered, Zap, Clock } from 'lucide-react';
+import { Building2, DoorOpen, Tv, Users, ListOrdered, Zap, Clock, Plus, Shuffle } from 'lucide-react';
 import { supabase, type Broker, type QueueEntry, type Visit } from '@/lib/supabase';
 import { fetchAll, interleaveQueue } from '@/lib/queueEngine';
 import { SimProvider, useSim } from '@/lib/simContext';
@@ -12,7 +12,7 @@ import FilaPanel from '@/components/FilaPanel';
 type View = 'recepcao' | 'chamadas' | 'corretor' | 'fila';
 
 function AppContent() {
-  const { simulatedTime, setSimulatedTime, testMode, setTestMode } = useSim();
+  const { clockDisplay, setStartTime, addMinute, testMode, setTestMode, sorteioTriggered } = useSim();
   const [view, setView] = useState<View>('recepcao');
   const [brokers, setBrokers] = useState<Broker[]>([]);
   const [visits, setVisits] = useState<Visit[]>([]);
@@ -70,8 +70,8 @@ function AppContent() {
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
       <header className="bg-slate-900/80 backdrop-blur border-b border-slate-800 sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6">
-          <div className="flex items-center justify-between h-16">
-            <div className="flex items-center gap-3">
+          <div className="flex items-center justify-between h-16 gap-4">
+            <div className="flex items-center gap-3 shrink-0">
               <Building2 className="h-8 w-8 text-amber-400" />
               <div>
                 <h1 className="text-lg font-bold tracking-tight">Plantão Imobiliário</h1>
@@ -79,41 +79,57 @@ function AppContent() {
               </div>
             </div>
 
-            {/* Simulation controls */}
-            <div className="flex items-center gap-2">
-              <div className="flex items-center gap-1.5 bg-slate-800 rounded-lg px-3 py-1.5">
-                <Clock className="h-4 w-4 text-amber-400" />
-                <input
-                  type="time"
-                  value={simulatedTime ?? ''}
-                  onChange={(e) => setSimulatedTime(e.target.value || null)}
-                  className="bg-transparent text-sm text-white focus:outline-none w-[90px]"
-                  title="Hora simulada do sistema"
-                />
-                {simulatedTime && (
-                  <button
-                    onClick={() => setSimulatedTime(null)}
-                    className="text-xs text-slate-500 hover:text-white"
-                    title="Voltar à hora real"
-                  >
-                    limpar
-                  </button>
-                )}
+            {/* Relógio e controlos de simulação */}
+            <div className="flex items-center gap-2 flex-wrap justify-end">
+              {/* Relógio ao vivo + campo editável */}
+              <div className="flex items-center gap-2 bg-slate-800 rounded-lg px-3 py-1.5">
+                <Clock className="h-5 w-5 text-amber-400 shrink-0" />
+                <div className="flex flex-col">
+                  <span className="font-mono text-lg font-bold text-white tabular-nums leading-none">{clockDisplay}</span>
+                  <input
+                    type="time"
+                    step="1"
+                    onChange={(e) => e.target.value && setStartTime(e.target.value)}
+                    className="text-[10px] text-slate-500 bg-transparent focus:outline-none mt-0.5 w-[70px]"
+                    title="Definir hora inicial"
+                  />
+                </div>
               </div>
+
+              {/* Botão +1 Minuto */}
+              <button
+                onClick={addMinute}
+                className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-2 rounded-lg text-sm font-medium transition"
+                title="Avançar 1 minuto"
+              >
+                <Plus className="h-4 w-4" />
+                +1 min
+              </button>
+
+              {/* Botão Modo de Teste Rápido */}
               <button
                 onClick={() => setTestMode(!testMode)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition ${
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition ${
                   testMode
                     ? 'bg-amber-500 text-slate-950'
                     : 'bg-slate-800 text-slate-400 hover:text-white'
                 }`}
-                title="Reduz o tempo da chamada de 2 min para 20 seg"
+                title="Reduz o tempo da chamada de 2 min para 10 seg"
               >
                 <Zap className="h-4 w-4" />
-                {testMode ? 'Teste rápido ON' : 'Teste rápido'}
+                {testMode ? 'Teste ON' : 'Teste rápido'}
               </button>
             </div>
           </div>
+
+          {/* Notificação de sorteio automático */}
+          {sorteioTriggered && (
+            <div className="flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-4 py-2 mb-2 text-sm text-emerald-400">
+              <Shuffle className="h-4 w-4 shrink-0" />
+              <span><strong className="text-emerald-300">Sorteio automático executado</strong> — a Fila Geral foi gerada por intercalação das duas imobiliárias.</span>
+            </div>
+          )}
+
           <nav className="flex gap-1 overflow-x-auto pb-2 -mb-px">
             {navItems.map((item) => (
               <button
@@ -142,8 +158,7 @@ function AppContent() {
 
       <footer className="border-t border-slate-800 py-3 text-center text-xs text-slate-500">
         Plantão Imobiliário — Sistema operacional de venda directa
-        {testMode && <span className="ml-2 text-amber-400">· Modo de teste rápido activo</span>}
-        {simulatedTime && <span className="ml-2 text-amber-400">· Hora simulada: {simulatedTime}</span>}
+        {testMode && <span className="ml-2 text-amber-400">· Modo de teste rápido: 10s por chamada</span>}
       </footer>
     </div>
   );
