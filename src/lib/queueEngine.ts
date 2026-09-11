@@ -1,4 +1,4 @@
-import { supabase, type Broker, type QueueEntry, type Visit, type VisitReason, type Agency } from './supabase';
+import { supabase, type Broker, type QueueEntry, type Visit, type VisitReason, type Agency, type QueueType } from './supabase';
 
 const LATE_LIMIT_SECONDS = 8 * 3600 + 45 * 60 + 59; // 08:45:59
 
@@ -25,20 +25,18 @@ export function formatPhoneDisplay(phone: string): string {
   return phone;
 }
 
+export function sanitizePhone(input: string): string {
+  return input.replace(/\D/g, '');
+}
+
 export const AGENCIES: Agency[] = ['Viva Imóveis', 'Casa Nobre'];
-export const REASONS: VisitReason[] = ['Primeira visita', 'Retorno', 'Indicação', 'Parceria', 'Decorado'];
+export const REASONS: VisitReason[] = ['Primeira visita', 'Retorno', 'Indicação', 'Parceria', 'Visita ao Decorado'];
 
+export const QUEUE_TYPES: QueueType[] = ['geral', 'decorado', 'parceria'];
 
-
-
-/**
- * Intercala as listas das duas imobiliárias em uma fila geral.
- * Se a chave for a mesma (presença), intercala por carimbo de chegada.
- * Reentradas vão para o final ordenadas por `reentry_at`.
- */
 export function interleaveQueue(entries: QueueEntry[], brokers: Broker[]): QueueEntry[] {
-  const waiting = entries.filter((e) => e.queue_status === 'aguardando');
-  const reentries = entries.filter((e) => e.queue_status === 'ausente' && e.reentry_at);
+  const waiting = entries.filter((e) => e.queue_type === 'geral' && e.queue_status === 'aguardando');
+  const reentries = entries.filter((e) => e.queue_type === 'geral' && e.queue_status === 'ausente' && e.reentry_at);
 
   const sortedReentries = [...reentries].sort(
     (a, b) => new Date(a.reentry_at!).getTime() - new Date(b.reentry_at!).getTime(),
@@ -57,22 +55,39 @@ export function interleaveQueue(entries: QueueEntry[], brokers: Broker[]): Queue
   return [...interleaved, ...sortedReentries];
 }
 
+export function reverseInterleaveQueue(entries: QueueEntry[], brokers: Broker[]): QueueEntry[] {
+  return [...interleaveQueue(entries, brokers)].reverse();
+}
+
 const PRIORITY_REASONS: VisitReason[] = ['Retorno', 'Indicação'];
 
 function sortKey(entries: QueueEntry[], brokers: Broker[], entry: QueueEntry): number {
   const visit = entries.find((e) => e.id === entry.id)?.visit;
   const broker = brokers.find((b) => b.id === entry.broker_id);
 
-  // Atrasados vão para o final do grupo
   if (broker && isLateForSort(broker.arrived_at)) return 999_999_000;
 
-  // Retorno e Indicação com corretor referenciado têm prioridade máxima
   const hasReferredBroker = visit?.referred_broker_id != null;
   const isPriority = visit != null && PRIORITY_REASONS.includes(visit.visit_reason) && hasReferredBroker;
   const priorityOffset = isPriority ? 0 : 500_000_000;
 
   if (visit) return priorityOffset + new Date(visit.created_at).getTime();
   return priorityOffset + new Date(entry.created_at).getTime();
+}
+
+export function nextBrokerFromInverseQueue(brokers: Broker[], sortedQueue: QueueEntry[]): Broker | undefined {
+  const reversed = [...sortedQueue].reverse();
+  for (const entry of reversed) {
+    if (entry.broker_id) {
+      const broker = brokers.find((b) => b.id === entry.broker_id);
+      if (broker && !broker.is_external_partner && broker.presence_status === 'presente' && broker.attendance_status === 'livre') {
+        return broker;
+      }
+    }
+  }
+  return brokers.find(
+    (b) => !b.is_external_partner && b.presence_status === 'presente' && b.attendance_status === 'livre',
+  );
 }
 
 export async function fetchAll() {

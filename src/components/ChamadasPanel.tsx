@@ -1,6 +1,6 @@
-import { useEffect, useState, useRef } from 'react';
-import { Volume2, VolumeX, Timer, Users, Building2, Zap } from 'lucide-react';
-import type { Broker, QueueEntry } from '@/lib/supabase';
+import { useEffect, useState, useRef, useCallback } from 'react';
+import { Volume2, VolumeX, Timer, Users, Building2, Zap, Home, ArrowLeftRight, AlertTriangle } from 'lucide-react';
+import { supabase, type Broker, type QueueEntry } from '@/lib/supabase';
 import { formatTime } from '@/lib/queueEngine';
 import { useSim } from '@/lib/simContext';
 
@@ -16,8 +16,10 @@ export default function ChamadasPanel({ queue, brokers }: Props) {
   const [attempts, setAttempts] = useState(0);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [calling, setCalling] = useState(false);
+  const [autoRecallNotice, setAutoRecallNotice] = useState<string | null>(null);
   const intervalRef = useRef<number | undefined>(undefined);
   const audioCtxRef = useRef<AudioContext | null>(null);
+  const timeoutFiredRef = useRef(false);
 
   useEffect(() => {
     const calling_entry = queue.find((e) => e.queue_status === 'chamando');
@@ -26,10 +28,13 @@ export default function ChamadasPanel({ queue, brokers }: Props) {
       setRemaining(callDuration);
       setAttempts(calling_entry.attempts);
       setCalling(true);
+      setAutoRecallNotice(null);
+      timeoutFiredRef.current = false;
       playAlert();
     } else if (!calling_entry && currentCall) {
       setCurrentCall(null);
       setCalling(false);
+      setAutoRecallNotice(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queue, currentCall]);
@@ -50,6 +55,117 @@ export default function ChamadasPanel({ queue, brokers }: Props) {
       };
     }
   }, [calling, remaining]);
+
+  const handleTimeout = useCallback(async () => {
+    if (!currentCall || timeoutFiredRef.current) return;
+    timeoutFiredRef.current = true;
+
+    // Pausar o corretor que não compareceu
+    if (currentCall.broker_id) {
+      await supabase
+        .from('brokers')
+        .update({
+          presence_status: 'pausa',
+          attendance_status: 'livre',
+          last_status_update: new Date().toISOString(),
+        })
+        .eq('id', currentCall.broker_id);
+    }
+
+    const wasLastAttempt = currentCall.attempts >= 3;
+
+    // Cliente continua ativo — volta para aguardando
+    await supabase
+      .from('queue_entries')
+      .update({
+        queue_status: 'aguardando',
+        broker_id: null,
+        attempts: wasLastAttempt ? 0 : currentCall.attempts,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', currentCall.id);
+
+    if (currentCall.visit_id) {
+      await supabase.from('visits').update({ status: 'aguardando' }).eq('id', currentCall.visit_id);
+    }
+
+    setAutoRecallNotice(
+      wasLastAttempt
+        ? `Corretor não compareceu após 3 chamadas. Corretor pausado. Sistema a chamar próximo corretor automaticamente...`
+        : `Corretor não compareceu. Sistema a chamar próximo corretor automaticamente...`,
+    );
+
+    // Auto-recall: dispara nova chamada para o próximo corretor da respectiva fila
+    setTimeout(async () => {
+      // Recarregar a entrada atualizada do queue
+      const { data: refreshedQueue } = await supabase
+        .from('queue_entries')
+        .select('*, visit:visits(*), broker:brokers(*)')
+        .eq('id', currentCall.id)
+        .maybeSingle();
+
+      if (!refreshedQueue) return;
+
+      const entry = refreshedQueue as QueueEntry;
+      let nextBrokerId: string | null = null;
+
+      if (entry.queue_type === 'decorado') {
+        // Fila inversa: próximo corretor disponível do topo da inversa
+        const reversed = [...queue].reverse();
+        for (const e of reversed) {
+          if (e.broker_id) {
+            const b = brokers.find((bk) => bk.id === e.broker_id);
+            if (b && !b.is_external_partner && b.presence_status === 'presente' && b.attendance_status === 'livre') {
+              nextBrokerId = b.id;
+              break;
+            }
+          }
+        }
+        if (!nextBrokerId) {
+          nextBrokerId = brokers.find(
+            (b) => !b.is_external_partner && b.presence_status === 'presente' && b.attendance_status === 'livre',
+          )?.id ?? null;
+        }
+      } else if (entry.queue_type === 'parceria') {
+        nextBrokerId = null;
+      } else {
+        // Fila geral: próximo corretor livre da mesma imobiliária
+        const available = brokers.find(
+          (b) => !b.is_external_partner && b.agency === entry.agency && b.presence_status === 'presente' && b.attendance_status === 'livre',
+        );
+        nextBrokerId = available?.id ?? null;
+      }
+
+      await supabase
+        .from('queue_entries')
+        .update({
+          queue_status: 'chamando',
+          broker_id: nextBrokerId,
+          attempts: (entry.attempts ?? 0) + 1,
+          called_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', entry.id);
+
+      if (entry.visit_id) {
+        await supabase.from('visits').update({ status: 'aguardando_chamada' }).eq('id', entry.visit_id);
+      }
+
+      if (nextBrokerId) {
+        await supabase
+          .from('brokers')
+          .update({ attendance_status: 'em_mesa', last_status_update: new Date().toISOString() })
+          .eq('id', nextBrokerId);
+      }
+    }, 1500);
+  }, [currentCall, brokers, queue]);
+
+  // When remaining hits 0, auto-trigger transbordo
+  useEffect(() => {
+    if (calling && remaining === 0 && !timeoutFiredRef.current) {
+      handleTimeout();
+    }
+  }, [remaining, calling, handleTimeout]);
 
   function playAlert() {
     if (!soundEnabled) return;
@@ -75,7 +191,7 @@ export default function ChamadasPanel({ queue, brokers }: Props) {
     }
   }
 
-  const nextEntries = queue.filter((e) => e.queue_status === 'aguardando').slice(0, 5);
+  const nextEntries = queue.filter((e) => e.queue_status === 'aguardando' && e.queue_type === 'geral').slice(0, 5);
   const totalWaiting = queue.filter((e) => e.queue_status === 'aguardando').length;
   const vivaWaiting = queue.filter((e) => e.queue_status === 'aguardando' && e.agency === 'Viva Imóveis').length;
   const nobreWaiting = queue.filter((e) => e.queue_status === 'aguardando' && e.agency === 'Casa Nobre').length;
@@ -84,6 +200,7 @@ export default function ChamadasPanel({ queue, brokers }: Props) {
   const brokerName = broker?.operational_name ?? 'A definir';
   const brokerAgency = broker?.agency ?? currentCall?.agency ?? '—';
   const visitReason = currentCall?.visit?.visit_reason ?? '—';
+  const queueTypeLabel = currentCall?.queue_type === 'decorado' ? 'Fila Inversa (Decorado)' : currentCall?.queue_type === 'parceria' ? 'Parceria' : 'Fila Geral';
 
   const timerPercent = (remaining / callDuration) * 100;
   const isUrgent = remaining <= Math.min(30, callDuration / 4) && remaining > 0;
@@ -92,7 +209,6 @@ export default function ChamadasPanel({ queue, brokers }: Props) {
     <div className="space-y-6">
       {/* TV Display */}
       <div className="bg-slate-900 rounded-3xl border border-slate-800 p-8 min-h-[400px] flex flex-col items-center justify-center relative overflow-hidden">
-        {/* Background pulse for active calls */}
         {calling && (
           <div className={`absolute inset-0 ${isUrgent ? 'bg-red-500/5' : 'bg-amber-500/5'} animate-pulse`} />
         )}
@@ -109,9 +225,28 @@ export default function ChamadasPanel({ queue, brokers }: Props) {
                   Modo de teste rápido — {callDuration}s por chamada
                 </div>
               )}
+              {autoRecallNotice && (
+                <div className="mt-4 inline-flex items-center gap-2 bg-orange-500/10 text-orange-400 px-4 py-2 rounded-lg text-sm">
+                  <AlertTriangle className="h-4 w-4" />
+                  {autoRecallNotice}
+                </div>
+              )}
             </div>
           ) : (
             <>
+              {/* Queue type badge */}
+              <div className="mb-4">
+                <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium ${
+                  currentCall?.queue_type === 'decorado' ? 'bg-orange-500/15 text-orange-400' :
+                  currentCall?.queue_type === 'parceria' ? 'bg-sky-500/15 text-sky-400' :
+                  'bg-amber-500/15 text-amber-400'
+                }`}>
+                  {currentCall?.queue_type === 'decorado' && <Home className="h-3 w-3" />}
+                  {currentCall?.queue_type === 'parceria' && <ArrowLeftRight className="h-3 w-3" />}
+                  {queueTypeLabel}
+                </span>
+              </div>
+
               <div className="mb-6">
                 <p className="text-sm uppercase tracking-widest text-slate-400 mb-1">Corretor</p>
                 <h1 className="text-4xl sm:text-5xl font-bold text-white">{brokerName}</h1>
@@ -132,7 +267,6 @@ export default function ChamadasPanel({ queue, brokers }: Props) {
                 </div>
               </div>
 
-              {/* Timer bar */}
               <div className="max-w-md mx-auto mb-6">
                 <div className="h-3 bg-slate-800 rounded-full overflow-hidden">
                   <div

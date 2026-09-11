@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { UserPlus, Phone, AlertTriangle, CheckCircle2, Clock, Search } from 'lucide-react';
+import { UserPlus, Phone, AlertTriangle, CheckCircle2, Clock, Search, EyeOff, Eye } from 'lucide-react';
 import { supabase, type Broker, type Visit, type VisitReason, type Agency } from '@/lib/supabase';
-import { REASONS, AGENCIES, formatPhoneDisplay } from '@/lib/queueEngine';
+import { REASONS, sanitizePhone, formatPhoneDisplay } from '@/lib/queueEngine';
 
 type Props = {
   brokers: Broker[];
@@ -14,17 +14,35 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
   const [reason, setReason] = useState<VisitReason>('Primeira visita');
   const [agency, setAgency] = useState<Agency>('Viva Imóveis');
   const [referredBrokerId, setReferredBrokerId] = useState<string>('');
-  const [message, setMessage] = useState<{ type: 'success' | 'error' | 'warning'; text: string } | null>(null);
+  const [message, setMessage] = useState<{ type: 'success' | 'error' | 'warning' | 'info'; text: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [searchPhone, setSearchPhone] = useState('');
+  const [revealed, setRevealed] = useState(false);
 
-  const normalizedPhone = phone.replace(/\D/g, '');
-  const duplicate = visits.find((v) => v.phone === normalizedPhone && v.status !== 'encerrado');
+  const normalizedPhone = sanitizePhone(phone);
+  const duplicate = visits.find((v) => v.phone === normalizedPhone && v.status !== 'encerrado' && normalizedPhone.length > 0);
 
-  const agencyBrokers = brokers.filter((b) => b.agency === agency);
+  const isParceria = reason === 'Parceria';
+  const isDecorado = reason === 'Visita ao Decorado';
+
+  const partnerBrokers = brokers.filter((b) => b.is_external_partner);
+  const agencyBrokers = brokers.filter((b) => b.agency === agency && !b.is_external_partner);
+
   const filteredVisits = searchPhone
-    ? visits.filter((v) => v.phone.includes(searchPhone.replace(/\D/g, '')))
+    ? visits.filter((v) => v.phone.includes(sanitizePhone(searchPhone)))
     : visits;
+
+  function handleReasonChange(newReason: VisitReason) {
+    setReason(newReason);
+    setRevealed(false);
+    setMessage(null);
+    if (newReason === 'Parceria') {
+      setAgency('Externo');
+    } else if (newReason === 'Visita ao Decorado') {
+      setAgency('Viva Imóveis');
+    }
+    setReferredBrokerId('');
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -44,6 +62,9 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
     }
 
     setSubmitting(true);
+
+    const queueType = isParceria ? 'parceria' : isDecorado ? 'decorado' : 'geral';
+
     const { data: visitData, error: visitError } = await supabase
       .from('visits')
       .insert({
@@ -67,12 +88,20 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
       agency,
       queue_status: 'aguardando',
       attempts: 0,
+      queue_type: queueType,
     });
 
     if (queueError) {
       setMessage({ type: 'error', text: 'Visita criada, mas erro ao entrar na fila.' });
     } else {
-      setMessage({ type: 'success', text: `${customerName.trim()} foi cadastrado e entrou na fila da ${agency}.` });
+      const successMsg = isParceria
+        ? `${customerName.trim()} foi cadastrado como Parceria e será direcionado ao Gerente de Parcerias.`
+        : isDecorado
+        ? `${customerName.trim()} foi cadastrado para Visita ao Decorado. O sistema chamará o próximo corretor da fila inversa.`
+        : `${customerName.trim()} foi cadastrado e entrou na fila.`;
+
+      setMessage({ type: 'success', text: successMsg });
+      setRevealed(true);
       setCustomerName('');
       setPhone('');
       setReferredBrokerId('');
@@ -109,7 +138,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
             <div>
               <label className="block text-sm font-medium text-slate-300 mb-1.5">
                 Telefone com DDD <span className="text-amber-400">*</span>
-                <span className="ml-2 text-xs text-slate-500">chave anti-duplicidade</span>
+                <span className="ml-2 text-xs text-slate-500">chave anti-duplicidade (apenas números)</span>
               </label>
               <div className="relative">
                 <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-500" />
@@ -117,7 +146,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
                   type="tel"
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
-                  placeholder="(11) 91234-5678"
+                  placeholder="Digite o telefone livremente (ex: 11912345678)"
                   className={`w-full bg-slate-800 border rounded-xl pl-10 pr-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 transition ${
                     duplicate
                       ? 'border-red-500/50 focus:ring-red-500'
@@ -141,7 +170,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
                 <label className="block text-sm font-medium text-slate-300 mb-1.5">Motivo da visita</label>
                 <select
                   value={reason}
-                  onChange={(e) => setReason(e.target.value as VisitReason)}
+                  onChange={(e) => handleReasonChange(e.target.value as VisitReason)}
                   className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-amber-500 transition"
                 >
                   {REASONS.map((r) => (
@@ -150,21 +179,60 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
                 </select>
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-1.5">Imobiliária da fila</label>
-                <select
-                  value={agency}
-                  onChange={(e) => setAgency(e.target.value as Agency)}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-amber-500 transition"
-                >
-                  {AGENCIES.map((a) => (
-                    <option key={a} value={a}>{a}</option>
-                  ))}
-                </select>
-              </div>
+              {!isParceria && !isDecorado && (
+                <div>
+                  <label className="block text-sm font-medium text-slate-300 mb-1.5">Imobiliária da fila</label>
+                  <select
+                    value={agency}
+                    onChange={(e) => setAgency(e.target.value as Agency)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-amber-500 transition"
+                  >
+                    <option value="Viva Imóveis">Viva Imóveis</option>
+                    <option value="Casa Nobre">Casa Nobre</option>
+                  </select>
+                </div>
+              )}
             </div>
 
-            {(reason === 'Indicação' || reason === 'Retorno') && (
+            {isParceria && (
+              <div className="bg-sky-500/5 border border-sky-500/20 rounded-xl p-4 space-y-3">
+                <p className="text-sm text-sky-400">
+                  <strong>Parceria:</strong> o atendimento será direcionado ao Gerente de Parcerias.
+                  O corretor parceiro não consome vez na fila geral nem tem acesso ao CRM.
+                </p>
+                <div>
+                  <label className="block text-sm font-medium text-slate-300 mb-1.5">Corretor parceiro (opcional)</label>
+                  <select
+                    value={referredBrokerId}
+                    onChange={(e) => setReferredBrokerId(e.target.value)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-sky-500 transition"
+                  >
+                    <option value="">Sem corretor parceiro específico</option>
+                    {partnerBrokers.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.operational_name} {b.external_company ? `(${b.external_company})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  {partnerBrokers.length === 0 && (
+                    <p className="text-xs text-slate-500 mt-1.5">
+                      Nenhum corretor parceiro cadastrado. Cadastre no painel Corretor / Gerente.
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {isDecorado && (
+              <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-4">
+                <p className="text-sm text-amber-400">
+                  <strong>Visita ao Decorado:</strong> o sistema chamará automaticamente o primeiro corretor
+                  disponível do topo da Fila Inversa Geral.
+                </p>
+              </div>
+            )}
+
+            {(reason === 'Indicação' || reason === 'Retorno') && !isParceria && !isDecorado && (
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-1.5">Corretor indicante (opcional)</label>
                 <select
@@ -180,6 +248,20 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
               </div>
             )}
 
+            {!revealed && !isParceria && !isDecorado && (
+              <div className="flex items-center gap-2 text-xs text-slate-500 bg-slate-800/40 rounded-lg p-2.5">
+                <EyeOff className="h-4 w-4 shrink-0" />
+                <span>A imobiliária e o corretor da vez são ocultados até o cadastro ser concluído.</span>
+              </div>
+            )}
+
+            {revealed && message?.type === 'success' && !isParceria && !isDecorado && (
+              <div className="flex items-center gap-2 text-xs text-emerald-400 bg-emerald-500/10 rounded-lg p-2.5">
+                <Eye className="h-4 w-4 shrink-0" />
+                <span>Cliente na fila da <strong>{agency}</strong>. O corretor da vez será definido no Motor da Fila.</span>
+              </div>
+            )}
+
             {message && (
               <div
                 className={`flex items-start gap-2 text-sm rounded-lg p-3 ${
@@ -187,6 +269,8 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
                     ? 'text-emerald-400 bg-emerald-500/10'
                     : message.type === 'warning'
                     ? 'text-amber-400 bg-amber-500/10'
+                    : message.type === 'info'
+                    ? 'text-sky-400 bg-sky-500/10'
                     : 'text-red-400 bg-red-500/10'
                 }`}
               >

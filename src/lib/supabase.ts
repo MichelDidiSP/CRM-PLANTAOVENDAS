@@ -5,10 +5,11 @@ const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-export type Agency = 'Viva Imóveis' | 'Casa Nobre';
-export type VisitReason = 'Primeira visita' | 'Retorno' | 'Indicação' | 'Parceria' | 'Decorado';
+export type Agency = 'Viva Imóveis' | 'Casa Nobre' | 'Externo';
+export type VisitReason = 'Primeira visita' | 'Retorno' | 'Indicação' | 'Parceria' | 'Visita ao Decorado';
 export type BrokerPresence = 'ausente' | 'presente' | 'pausa';
-export type AttendanceStatus = 'livre' | 'em_mesa' | 'decorado' | 'encerrado';
+export type AttendanceStatus = 'livre' | 'em_mesa' | 'decorado' | 'encerrado' | 'parceiro';
+export type QueueType = 'geral' | 'decorado' | 'parceria';
 
 export type Broker = {
   id: string;
@@ -18,6 +19,8 @@ export type Broker = {
   attendance_status: AttendanceStatus;
   arrived_at: string | null;
   last_status_update: string;
+  is_external_partner: boolean;
+  external_company: string | null;
 };
 
 export type Visit = {
@@ -39,7 +42,9 @@ export type QueueEntry = {
   attempts: number;
   called_at: string | null;
   reentry_at: string | null;
+  queue_type: QueueType;
   created_at: string;
+  updated_at: string;
   visit?: Visit;
   broker?: Broker;
 };
