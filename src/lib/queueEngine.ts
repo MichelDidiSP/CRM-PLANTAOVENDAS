@@ -1,6 +1,7 @@
-import { supabase, type Broker, type QueueEntry, type Visit, type VisitReason, type Agency, type QueueType } from './supabase';
+import { supabase, type Broker, type QueueEntry, type Visit, type VisitReason, type Agency, type QueueType, type PlantaoSession } from './supabase';
 
 const LATE_LIMIT_SECONDS = 8 * 3600 + 45 * 60 + 59; // 08:45:59
+export const SORTED_TRIGGER_SECONDS = 8 * 3600 + 46 * 60; // 08:46:00
 
 export function secondsSinceMidnight(date: Date): number {
   return date.getHours() * 3600 + date.getMinutes() * 60 + date.getSeconds();
@@ -34,6 +35,133 @@ export const REASONS: VisitReason[] = ['Primeira visita', 'Retorno', 'Indicaçã
 
 export const QUEUE_TYPES: QueueType[] = ['geral', 'decorado', 'parceria'];
 
+function shuffleArray<T>(arr: T[]): T[] {
+  const result = [...arr];
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [result[i], result[j]] = [result[j], result[i]];
+  }
+  return result;
+}
+
+export type SorteioResult = {
+  vivaBrokers: Broker[];
+  nobreBrokers: Broker[];
+  interleavedBrokers: Broker[];
+  lateBrokers: Broker[];
+  sessionId: string;
+};
+
+/**
+ * Sorteio automático às 08:46:00:
+ * 1. Pegar corretores presentes até 08:45:59 de cada imobiliária (excluindo parceiros externos).
+ * 2. Embaralhar cada lista aleatoriamente (Fisher-Yates).
+ * 3. Intercalar A1, B1, A2, B2... para gerar a Fila Geral.
+ * 4. Quem chegou após 08:45:59 entra no fim com tag "Atrasado".
+ * 5. Persistir sorteio_order em brokers e criar uma plantao_session.
+ */
+export async function executeSorteio(brokers: Broker[], simSeconds: number): Promise<SorteioResult | null> {
+  const eligible = brokers.filter(
+    (b) => !b.is_external_partner && b.agency !== 'Externo' && b.presence_status === 'presente',
+  );
+
+  const onTime = eligible.filter((b) => !isLateForSort(b.arrived_at));
+  const late = eligible.filter((b) => isLateForSort(b.arrived_at));
+
+  const vivaOnTime = onTime.filter((b) => b.agency === 'Viva Imóveis');
+  const nobreOnTime = onTime.filter((b) => b.agency === 'Casa Nobre');
+
+  const shuffledViva = shuffleArray(vivaOnTime);
+  const shuffledNobre = shuffleArray(nobreOnTime);
+
+  const interleaved: Broker[] = [];
+  const maxLen = Math.max(shuffledViva.length, shuffledNobre.length);
+  for (let i = 0; i < maxLen; i++) {
+    if (shuffledViva[i]) interleaved.push(shuffledViva[i]);
+    if (shuffledNobre[i]) interleaved.push(shuffledNobre[i]);
+  }
+
+  const lateViva = late.filter((b) => b.agency === 'Viva Imóveis');
+  const lateNobre = late.filter((b) => b.agency === 'Casa Nobre');
+  const lateInterleaved: Broker[] = [];
+  const maxLate = Math.max(lateViva.length, lateNobre.length);
+  for (let i = 0; i < maxLate; i++) {
+    if (lateViva[i]) lateInterleaved.push(lateViva[i]);
+    if (lateNobre[i]) lateInterleaved.push(lateNobre[i]);
+  }
+
+  const finalOrder = [...interleaved, ...lateInterleaved];
+
+  const sessionId = `sorteio_${Date.now()}`;
+
+  // Persistir a ordem do sorteio nos corretores
+  for (let i = 0; i < finalOrder.length; i++) {
+    await supabase
+      .from('brokers')
+      .update({ sorteio_order: i + 1 })
+      .eq('id', finalOrder[i].id);
+  }
+
+  // Criar sessão de plantão
+  await supabase.from('plantao_sessions').insert({
+    id: sessionId,
+    status: 'active',
+  });
+
+  // Encerrar sessões anteriores
+  await supabase
+    .from('plantao_sessions')
+    .update({ status: 'ended', ended_at: new Date().toISOString() })
+    .neq('id', sessionId);
+
+  return {
+    vivaBrokers: shuffledViva,
+    nobreBrokers: shuffledNobre,
+    interleavedBrokers: finalOrder,
+    lateBrokers: lateInterleaved,
+    sessionId,
+  };
+}
+
+/**
+ * Reiniciar plantão: limpa a fila atual, zera o relógio, coloca corretores como disponíveis.
+ * NÃO apaga visitas (banco de clientes permanece intacto).
+ */
+export async function reiniciarPlantao(brokers: Broker[]): Promise<void> {
+  // Deletar todas as queue_entries (fila atual)
+  await supabase.from('queue_entries').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+
+  // Zerar sorteio_order e resetar attendance_status para 'livre', presence_status para 'ausente'
+  for (const broker of brokers) {
+    await supabase
+      .from('brokers')
+      .update({
+        sorteio_order: null,
+        attendance_status: 'livre',
+        presence_status: 'ausente',
+        arrived_at: null,
+        last_status_update: new Date().toISOString(),
+      })
+      .eq('id', broker.id);
+  }
+
+  // Marcar todas as sessões como encerradas
+  await supabase
+    .from('plantao_sessions')
+    .update({ status: 'ended', ended_at: new Date().toISOString() })
+    .eq('status', 'active');
+
+  // Resetar status das visitas que estavam em atendimento para 'encerrado'
+  await supabase
+    .from('visits')
+    .update({ status: 'encerrado' })
+    .in('status', ['aguardando', 'aguardando_chamada', 'em_atendimento']);
+}
+
+/**
+ * Intercala as listas das duas imobiliárias usando a ordem do sorteio.
+ * Reentradas vão para o final ordenadas por `reentry_at`.
+ */
 export function interleaveQueue(entries: QueueEntry[], brokers: Broker[]): QueueEntry[] {
   const waiting = entries.filter((e) => e.queue_type === 'geral' && e.queue_status === 'aguardando');
   const reentries = entries.filter((e) => e.queue_type === 'geral' && e.queue_status === 'ausente' && e.reentry_at);
@@ -67,6 +195,14 @@ function sortKey(entries: QueueEntry[], brokers: Broker[], entry: QueueEntry): n
 
   if (broker && isLateForSort(broker.arrived_at)) return 999_999_000;
 
+  // Se o corretor tem sorteio_order, usar essa ordem
+  if (broker && broker.sorteio_order != null) {
+    const hasReferredBroker = visit?.referred_broker_id != null;
+    const isPriority = visit != null && PRIORITY_REASONS.includes(visit.visit_reason) && hasReferredBroker;
+    const priorityOffset = isPriority ? 0 : 500_000_000;
+    return priorityOffset + broker.sorteio_order;
+  }
+
   const hasReferredBroker = visit?.referred_broker_id != null;
   const isPriority = visit != null && PRIORITY_REASONS.includes(visit.visit_reason) && hasReferredBroker;
   const priorityOffset = isPriority ? 0 : 500_000_000;
@@ -91,16 +227,18 @@ export function nextBrokerFromInverseQueue(brokers: Broker[], sortedQueue: Queue
 }
 
 export async function fetchAll() {
-  const [brokersRes, visitsRes, queueRes] = await Promise.all([
+  const [brokersRes, visitsRes, queueRes, sessionsRes] = await Promise.all([
     supabase.from('brokers').select('*').order('created_at', { ascending: true }),
     supabase.from('visits').select('*').order('created_at', { ascending: true }),
     supabase.from('queue_entries').select('*, visit:visits(*), broker:brokers(*)').order('created_at', { ascending: true }),
+    supabase.from('plantao_sessions').select('*').order('started_at', { ascending: false }).limit(1),
   ]);
 
   return {
     brokers: (brokersRes.data ?? []) as Broker[],
     visits: (visitsRes.data ?? []) as Visit[],
     queue: (queueRes.data ?? []) as QueueEntry[],
-    error: brokersRes.error || visitsRes.error || queueRes.error,
+    activeSession: (sessionsRes.data?.[0] ?? null) as PlantaoSession | null,
+    error: brokersRes.error || visitsRes.error || queueRes.error || sessionsRes.error,
   };
 }

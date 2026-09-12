@@ -21,6 +21,7 @@ export type Broker = {
   last_status_update: string;
   is_external_partner: boolean;
   external_company: string | null;
+  sorteio_order: number | null;
 };
 
 export type Visit = {
@@ -43,8 +44,16 @@ export type QueueEntry = {
   called_at: string | null;
   reentry_at: string | null;
   queue_type: QueueType;
+  sorteio_session: string | null;
   created_at: string;
   updated_at: string;
   visit?: Visit;
   broker?: Broker;
+};
+
+export type PlantaoSession = {
+  id: string;
+  started_at: string;
+  ended_at: string | null;
+  status: 'active' | 'ended';
 };

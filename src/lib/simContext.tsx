@@ -4,22 +4,16 @@ const SORTED_TRIGGER_SECONDS = 8 * 3600 + 46 * 60; // 08:46:00
 const DEFAULT_START_SECONDS = 8 * 3600 + 30 * 60;  // 08:30:00
 
 type SimContextType = {
-  /** Segundos desde meia-noite do relógio simulado */
   simSeconds: number;
-  /** Hora formatada HH:MM:SS */
   clockDisplay: string;
-  /** Define a hora inicial manualmente (formato "HH:MM" ou "HH:MM:SS") */
   setStartTime: (time: string) => void;
-  /** Avança 1 minuto no relógio */
   addMinute: () => void;
   testMode: boolean;
   setTestMode: (on: boolean) => void;
-  /** Retorna a hora actual simulada como Date */
   getCurrentTime: () => Date;
-  /** Duração da chamada em segundos (10s em teste, 120s normal) */
   callDuration: number;
-  /** True quando o relógio cruzou 08:46:00 e o sorteio foi executado */
   sorteioTriggered: boolean;
+  resetClock: () => void;
 };
 
 const SimContext = createContext<SimContextType | null>(null);
@@ -33,12 +27,8 @@ function secondsToClock(total: number): string {
 
 function parseTimeInput(input: string): number | null {
   const parts = input.split(':').map(Number);
-  if (parts.length === 2 && parts.every((n) => !isNaN(n))) {
-    return parts[0] * 3600 + parts[1] * 60;
-  }
-  if (parts.length === 3 && parts.every((n) => !isNaN(n))) {
-    return parts[0] * 3600 + parts[1] * 60 + parts[2];
-  }
+  if (parts.length === 2 && parts.every((n) => !isNaN(n))) return parts[0] * 3600 + parts[1] * 60;
+  if (parts.length === 3 && parts.every((n) => !isNaN(n))) return parts[0] * 3600 + parts[1] * 60 + parts[2];
   return null;
 }
 
@@ -48,7 +38,6 @@ export function SimProvider({ children }: { children: ReactNode }) {
   const [sorteioTriggered, setSorteioTriggered] = useState(false);
   const sorteioFiredRef = useRef(false);
 
-  // Motor do relógio: avança 1 segundo por segundo em tempo real
   useEffect(() => {
     const interval = window.setInterval(() => {
       setSimSeconds((s) => (s + 1) % 86400);
@@ -56,7 +45,6 @@ export function SimProvider({ children }: { children: ReactNode }) {
     return () => window.clearInterval(interval);
   }, []);
 
-  // Gatilho do sorteio: dispara uma vez quando o relógio atinge 08:46:00
   useEffect(() => {
     if (!sorteioFiredRef.current && simSeconds >= SORTED_TRIGGER_SECONDS) {
       sorteioFiredRef.current = true;
@@ -86,22 +74,18 @@ export function SimProvider({ children }: { children: ReactNode }) {
     return d;
   }, [simSeconds]);
 
+  const resetClock = useCallback(() => {
+    sorteioFiredRef.current = false;
+    setSorteioTriggered(false);
+    setSimSeconds(DEFAULT_START_SECONDS);
+  }, []);
+
   const callDuration = testMode ? 10 : 120;
   const clockDisplay = secondsToClock(simSeconds);
 
   return (
     <SimContext.Provider
-      value={{
-        simSeconds,
-        clockDisplay,
-        setStartTime,
-        addMinute,
-        testMode,
-        setTestMode,
-        getCurrentTime,
-        callDuration,
-        sorteioTriggered,
-      }}
+      value={{ simSeconds, clockDisplay, setStartTime, addMinute, testMode, setTestMode, getCurrentTime, callDuration, sorteioTriggered, resetClock }}
     >
       {children}
     </SimContext.Provider>
