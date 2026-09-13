@@ -49,6 +49,7 @@ export type SorteioResult = {
   nobreBrokers: Broker[];
   interleavedBrokers: Broker[];
   lateBrokers: Broker[];
+  desempateWinner: Agency;
   sessionId: string;
 };
 
@@ -56,9 +57,12 @@ export type SorteioResult = {
  * Sorteio automático às 08:46:00:
  * 1. Pegar corretores presentes até 08:45:59 de cada imobiliária (excluindo parceiros externos).
  * 2. Embaralhar cada lista aleatoriamente (Fisher-Yates).
- * 3. Intercalar A1, B1, A2, B2... para gerar a Fila Geral.
- * 4. Quem chegou após 08:45:59 entra no fim com tag "Atrasado".
- * 5. Persistir sorteio_order em brokers e criar uma plantao_session.
+ * 3. Sorteio entre Empresas: sorteio aleatório entre as duas imobiliárias para definir quem inicia.
+ * 4. Intercalar respeitando o vencedor do desempate:
+ *    - Se A ganhar: A1, B1, A2, B2...
+ *    - Se B ganhar: B1, A1, B2, A2...
+ * 5. Quem chegou após 08:45:59 entra no fim com tag "Atrasado".
+ * 6. Persistir sorteio_order em brokers e criar uma plantao_session.
  */
 export async function executeSorteio(brokers: Broker[], simSeconds: number): Promise<SorteioResult | null> {
   const eligible = brokers.filter(
@@ -74,20 +78,28 @@ export async function executeSorteio(brokers: Broker[], simSeconds: number): Pro
   const shuffledViva = shuffleArray(vivaOnTime);
   const shuffledNobre = shuffleArray(nobreOnTime);
 
+  // Sorteio entre Empresas (Desempate): define quem inicia a intercalação
+  const desempateWinner: Agency = Math.random() < 0.5 ? 'Viva Imóveis' : 'Casa Nobre';
+
+  const first = desempateWinner === 'Viva Imóveis' ? shuffledViva : shuffledNobre;
+  const second = desempateWinner === 'Viva Imóveis' ? shuffledNobre : shuffledViva;
+
   const interleaved: Broker[] = [];
-  const maxLen = Math.max(shuffledViva.length, shuffledNobre.length);
+  const maxLen = Math.max(first.length, second.length);
   for (let i = 0; i < maxLen; i++) {
-    if (shuffledViva[i]) interleaved.push(shuffledViva[i]);
-    if (shuffledNobre[i]) interleaved.push(shuffledNobre[i]);
+    if (first[i]) interleaved.push(first[i]);
+    if (second[i]) interleaved.push(second[i]);
   }
 
   const lateViva = late.filter((b) => b.agency === 'Viva Imóveis');
   const lateNobre = late.filter((b) => b.agency === 'Casa Nobre');
+  const lateFirst = desempateWinner === 'Viva Imóveis' ? lateViva : lateNobre;
+  const lateSecond = desempateWinner === 'Viva Imóveis' ? lateNobre : lateViva;
   const lateInterleaved: Broker[] = [];
-  const maxLate = Math.max(lateViva.length, lateNobre.length);
+  const maxLate = Math.max(lateFirst.length, lateSecond.length);
   for (let i = 0; i < maxLate; i++) {
-    if (lateViva[i]) lateInterleaved.push(lateViva[i]);
-    if (lateNobre[i]) lateInterleaved.push(lateNobre[i]);
+    if (lateFirst[i]) lateInterleaved.push(lateFirst[i]);
+    if (lateSecond[i]) lateInterleaved.push(lateSecond[i]);
   }
 
   const finalOrder = [...interleaved, ...lateInterleaved];
@@ -119,6 +131,7 @@ export async function executeSorteio(brokers: Broker[], simSeconds: number): Pro
     nobreBrokers: shuffledNobre,
     interleavedBrokers: finalOrder,
     lateBrokers: lateInterleaved,
+    desempateWinner,
     sessionId,
   };
 }

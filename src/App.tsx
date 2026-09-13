@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { Building2, DoorOpen, Tv, Users, ListOrdered, Zap, Clock, Plus, Shuffle, ClipboardList, RefreshCw, FileText, X } from 'lucide-react';
+import { Building2, DoorOpen, Tv, Users, ListOrdered, Zap, Clock, Plus, Shuffle, ClipboardList, RefreshCw, FileText, X, Trophy } from 'lucide-react';
 import { supabase, type Broker, type QueueEntry, type Visit } from '@/lib/supabase';
 import { fetchAll, interleaveQueue, executeSorteio, reiniciarPlantao, type SorteioResult } from '@/lib/queueEngine';
 import { SimProvider, useSim } from '@/lib/simContext';
@@ -160,7 +160,7 @@ function AppContent() {
           {sorteioTriggered && sorteioResult && (
             <div className="flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-4 py-2 mb-2 text-sm text-emerald-400">
               <Shuffle className="h-4 w-4 shrink-0" />
-              <span><strong className="text-emerald-300">Sorteio automático executado às 08:46:00</strong> — {sorteioResult.vivaBrokers.length} corretores Viva + {sorteioResult.nobreBrokers.length} Casa Nobre intercalados. {sorteioResult.lateBrokers.length} atrasado(s) no fim da fila.</span>
+              <span><strong className="text-emerald-300">Sorteio automático executado às 08:46:00</strong> — {sorteioResult.vivaBrokers.length} corretores Viva + {sorteioResult.nobreBrokers.length} Casa Nobre intercalados. <strong className="text-amber-300">Sorteio entre Empresas: {sorteioResult.desempateWinner} ganhou a preferência</strong> e inicia a intercalação. {sorteioResult.lateBrokers.length} atrasado(s) no fim da fila.</span>
             </div>
           )}
 
@@ -273,6 +273,24 @@ function AuditoriaPanel({ sorteioResult, brokers, queue, attendanceReport }: {
           </div>
         ) : (
           <div className="space-y-6">
+            {/* Sorteio entre Empresas — banner em destaque */}
+            <div className={`rounded-xl p-5 border-2 ${sorteioResult.desempateWinner === 'Viva Imóveis' ? 'bg-amber-500/10 border-amber-500/40' : 'bg-sky-500/10 border-sky-500/40'}`}>
+              <div className="flex items-center gap-3">
+                <div className={`p-3 rounded-xl ${sorteioResult.desempateWinner === 'Viva Imóveis' ? 'bg-amber-500/20' : 'bg-sky-500/20'}`}>
+                  <Trophy className={`h-8 w-8 ${sorteioResult.desempateWinner === 'Viva Imóveis' ? 'text-amber-400' : 'text-sky-400'}`} />
+                </div>
+                <div>
+                  <p className="text-xs uppercase tracking-wide text-slate-400">Sorteio entre Empresas (Desempate)</p>
+                  <p className="text-xl font-bold text-white">
+                    <span className={sorteioResult.desempateWinner === 'Viva Imóveis' ? 'text-amber-400' : 'text-sky-400'}>{sorteioResult.desempateWinner}</span> ganhou a preferência e inicia a intercalação do plantão
+                  </p>
+                  <p className="text-sm text-slate-400 mt-1">
+                    Ordem de intercalação: {sorteioResult.desempateWinner === 'Viva Imóveis' ? 'A1, B1, A2, B2…' : 'B1, A1, B2, A2…'}
+                  </p>
+                </div>
+              </div>
+            </div>
+
             {/* Listas individuais */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-4">
