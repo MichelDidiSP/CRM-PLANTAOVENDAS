@@ -134,35 +134,38 @@ function AppContent() {
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
       <header className="bg-slate-900/80 backdrop-blur border-b border-slate-800 sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6">
-          <div className="flex items-center justify-between h-16 gap-4">
+          <div className="flex flex-col gap-2 py-2">
+            {/* Title row */}
             <div className="flex items-center gap-3 shrink-0">
-              <Building2 className="h-8 w-8 text-amber-400" />
+              <Building2 className="h-7 w-7 text-amber-400" />
               <div>
                 <h1 className="text-lg font-bold tracking-tight">Plantão Imobiliário</h1>
                 <p className="text-xs text-slate-400 hidden sm:block">Gestão integrada de atendimento</p>
               </div>
             </div>
 
-            {/* Relógio do simulador — destaque central */}
-            <div className="flex items-center gap-3 bg-amber-500/10 border-2 border-amber-500/40 rounded-xl px-5 py-1.5 shrink-0">
-              <Clock className="h-6 w-6 text-amber-400 shrink-0" />
-              <div className="flex flex-col items-center">
-                <span className="font-mono text-2xl font-bold text-amber-400 tabular-nums leading-none tracking-wide">{clockDisplay}</span>
-                <input
-                  type="time"
-                  step="1"
-                  onChange={(e) => e.target.value && setStartTime(e.target.value)}
-                  className="text-[10px] text-amber-200/60 bg-transparent focus:outline-none mt-0.5 w-[70px] text-center"
-                  title="Definir hora inicial"
-                />
+            {/* Top row: clock left, controls right */}
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              {/* Relógio do simulador — topo esquerdo, alto contraste */}
+              <div className="flex items-center gap-3 bg-slate-950 border-2 border-amber-400 rounded-xl px-5 py-2 shrink-0 shadow-lg shadow-amber-500/20">
+                <Clock className="h-7 w-7 text-amber-400 shrink-0" />
+                <div className="flex flex-col items-center">
+                  <span className="font-mono text-3xl font-bold text-amber-300 tabular-nums leading-none tracking-wider drop-shadow-[0_0_8px_rgba(251,191,36,0.4)]">{clockDisplay}</span>
+                  <input
+                    type="time"
+                    step="1"
+                    onChange={(e) => e.target.value && setStartTime(e.target.value)}
+                    className="text-[10px] text-amber-200/60 bg-transparent focus:outline-none mt-1 w-[70px] text-center"
+                    title="Definir hora inicial"
+                  />
+                </div>
+                <div className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium ${currentShift === 'manha' ? 'bg-amber-500/20 text-amber-300' : 'bg-indigo-500/20 text-indigo-300'}`}>
+                  {shiftIcon}
+                  {shiftLabel}
+                </div>
               </div>
-              <div className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium ${currentShift === 'manha' ? 'bg-amber-500/15 text-amber-300' : 'bg-indigo-500/15 text-indigo-300'}`}>
-                {shiftIcon}
-                {shiftLabel}
-              </div>
-            </div>
 
-            <div className="flex items-center gap-2 flex-wrap justify-end">
+              <div className="flex items-center gap-2 flex-wrap justify-end">
               {/* Calendar / Date Picker */}
               <div className="flex items-center gap-2 bg-slate-800 rounded-lg px-3 py-1.5">
                 <Calendar className="h-5 w-5 text-amber-400 shrink-0" />
@@ -206,7 +209,7 @@ function AppContent() {
                 <RefreshCw className="h-4 w-4" /> Reiniciar Plantão
               </button>
             </div>
-          </div>
+            </div>
 
           {/* Status banners */}
           {transitioning && (
@@ -249,6 +252,7 @@ function AppContent() {
               </button>
             ))}
           </nav>
+        </div>
         </div>
       </header>
 

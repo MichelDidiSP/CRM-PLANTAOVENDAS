@@ -177,14 +177,12 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
 
     // Determine broker assignment for the queue entry
     let assignedBrokerId: string | null = null;
-    let skipPositionConsumption = false;
 
     if (isIndicacaoPresente) {
       // Rule 1: goes directly to the referred broker, does NOT consume their vez
       const referred = brokers.find((b) => b.id === quickBrokerId);
       if (referred && referred.presence_status === 'presente' && referred.attendance_status === 'livre') {
         assignedBrokerId = referred.id;
-        skipPositionConsumption = true;
       }
     } else if (isIndicacaoAusente) {
       // Rule 2: referred broker is absent → last available broker of same agency
