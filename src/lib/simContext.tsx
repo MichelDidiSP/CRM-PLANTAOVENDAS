@@ -69,16 +69,34 @@ function determineShift(seconds: number): Shift {
   return 'manha';
 }
 
+const STORAGE_KEY = 'plantao_sim_seconds';
+const TESTMODE_KEY = 'plantao_test_mode';
+
 export function SimProvider({ children }: { children: ReactNode }) {
-  const [simSeconds, setSimSeconds] = useState(DEFAULT_START_SECONDS);
-  const [testMode, setTestMode] = useState(false);
+  const [simSeconds, setSimSeconds] = useState(() => {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored !== null) {
+        const parsed = parseInt(stored, 10);
+        if (!isNaN(parsed) && parsed >= 0 && parsed < 86400) return parsed;
+      }
+    } catch { /* localStorage not available */ }
+    return DEFAULT_START_SECONDS;
+  });
+  const [testMode, setTestMode] = useState(() => {
+    try { return localStorage.getItem(TESTMODE_KEY) === 'true'; } catch { return false; }
+  });
   const [sorteioTriggered, setSorteioTriggered] = useState(false);
   const [plantaoDate, setPlantaoDate] = useState(() => new Date().toISOString().slice(0, 10));
   const sorteioFiredRef = useRef(false);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
-      setSimSeconds((s) => (s + 1) % 86400);
+      setSimSeconds((s) => {
+        const next = (s + 1) % 86400;
+        try { localStorage.setItem(STORAGE_KEY, String(next)); } catch { /* ignore */ }
+        return next;
+      });
     }, 1000);
     return () => window.clearInterval(interval);
   }, []);
@@ -102,11 +120,16 @@ export function SimProvider({ children }: { children: ReactNode }) {
       sorteioFiredRef.current = parsed >= threshold;
       setSorteioTriggered(parsed >= threshold);
       setSimSeconds(parsed);
+      try { localStorage.setItem(STORAGE_KEY, String(parsed)); } catch { /* ignore */ }
     }
   }, []);
 
   const addMinute = useCallback(() => {
-    setSimSeconds((s) => (s + 60) % 86400);
+    setSimSeconds((s) => {
+      const next = (s + 60) % 86400;
+      try { localStorage.setItem(STORAGE_KEY, String(next)); } catch { /* ignore */ }
+      return next;
+    });
   }, []);
 
   const jumpToAfternoon = useCallback(() => {
@@ -114,6 +137,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
     sorteioFiredRef.current = afternoonStart >= TARDE_SORTEIO;
     setSorteioTriggered(afternoonStart >= TARDE_SORTEIO);
     setSimSeconds(afternoonStart);
+    try { localStorage.setItem(STORAGE_KEY, String(afternoonStart)); } catch { /* ignore */ }
   }, []);
 
   const getCurrentTime = useCallback((): Date => {
@@ -129,6 +153,22 @@ export function SimProvider({ children }: { children: ReactNode }) {
     sorteioFiredRef.current = false;
     setSorteioTriggered(false);
     setSimSeconds(DEFAULT_START_SECONDS);
+    try { localStorage.setItem(STORAGE_KEY, String(DEFAULT_START_SECONDS)); } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => {
+    try { localStorage.setItem(TESTMODE_KEY, String(testMode)); } catch { /* ignore */ }
+  }, [testMode]);
+
+  // Restore sorteioTriggered state on mount based on persisted time
+  useEffect(() => {
+    const shift = determineShift(simSeconds);
+    const threshold = SHIFT_BOUNDARIES[shift].sorteio;
+    if (simSeconds >= threshold) {
+      sorteioFiredRef.current = true;
+      setSorteioTriggered(true);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const callDuration = testMode ? 10 : 120;

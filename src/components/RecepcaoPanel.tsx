@@ -1,10 +1,10 @@
 import { useState, useRef } from 'react';
 import { UserPlus, Phone, TriangleAlert as AlertTriangle, CircleCheck as CheckCircle2, Clock, Search, EyeOff, Eye, Zap, UserCheck, UserX, Building2 } from 'lucide-react';
 import { supabase, type Broker, type Visit, type VisitReason, type Agency } from '@/lib/supabase';
-import { REASONS, sanitizePhone, formatPhoneDisplay, lastBrokerFromAgency } from '@/lib/queueEngine';
+import { REASONS, QUICK_REASONS, sanitizePhone, formatPhoneDisplay, lastBrokerFromAgency, nextBrokerFromAgency, nextBrokerByArrival, nextBrokerFromInverseTop } from '@/lib/queueEngine';
 import { useSim } from '@/lib/simContext';
 
-type QuickReason = VisitReason | 'Indicação Presente' | 'Indicação Ausente' | 'Indicação Imobiliária';
+type QuickReason = VisitReason;
 
 type Props = {
   brokers: Broker[];
@@ -15,15 +15,15 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
   const [customerName, setCustomerName] = useState('');
   const [phone, setPhone] = useState('');
   const [reason, setReason] = useState<VisitReason>('Primeira visita');
-  const [agency, setAgency] = useState<Agency>('Viva Imóveis');
   const [referredBrokerId, setReferredBrokerId] = useState<string>('');
   const [message, setMessage] = useState<{ type: 'success' | 'error' | 'warning' | 'info'; text: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [searchPhone, setSearchPhone] = useState('');
   const [revealed, setRevealed] = useState(false);
-  const { currentShift } = useSim();
+  const { currentShift, isPreSorteio } = useSim();
+
+  // Quick entry state
   const [quickReason, setQuickReason] = useState<QuickReason>('Primeira visita');
-  const [quickAgency, setQuickAgency] = useState<Agency>('Viva Imóveis');
   const [quickBrokerId, setQuickBrokerId] = useState<string>('');
   const [quickSubmitting, setQuickSubmitting] = useState(false);
   const quickCounterRef = useRef(0);
@@ -33,13 +33,12 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
   const isIndicacaoImobiliaria = quickReason === 'Indicação Imobiliária';
   const isAnyIndicacao = isIndicacaoPresente || isIndicacaoAusente || isIndicacaoImobiliaria;
   const needsBrokerSelect = isIndicacaoPresente || isIndicacaoAusente;
-  const needsAgencySelect = !isIndicacaoPresente && quickReason !== 'Parceria' && quickReason !== 'Visita ao Decorado';
 
-  const availableBrokersForQuick = brokers.filter(
-    (b) => !b.is_external_partner && b.agency === quickAgency && b.presence_status !== 'ausente',
+  const presentBrokers = brokers.filter(
+    (b) => !b.is_external_partner && b.presence_status === 'presente',
   );
-  const presentBrokersForQuick = brokers.filter(
-    (b) => !b.is_external_partner && b.agency === quickAgency && b.presence_status === 'presente',
+  const allInternalBrokers = brokers.filter(
+    (b) => !b.is_external_partner,
   );
 
   const normalizedPhone = sanitizePhone(phone);
@@ -49,7 +48,6 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
   const isDecorado = reason === 'Visita ao Decorado';
 
   const partnerBrokers = brokers.filter((b) => b.is_external_partner);
-  const agencyBrokers = brokers.filter((b) => b.agency === agency && !b.is_external_partner);
 
   const filteredVisits = searchPhone
     ? visits.filter((v) => v.phone.includes(sanitizePhone(searchPhone)))
@@ -59,11 +57,6 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
     setReason(newReason);
     setRevealed(false);
     setMessage(null);
-    if (newReason === 'Parceria') {
-      setAgency('Externo');
-    } else if (newReason === 'Visita ao Decorado') {
-      setAgency('Viva Imóveis');
-    }
     setReferredBrokerId('');
   }
 
@@ -88,6 +81,10 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
 
     const queueType = isParceria ? 'parceria' : isDecorado ? 'decorado' : 'geral';
 
+    // Agency is hidden from reception — determined by system rules
+    // For Parceria: Externo; for Decorado: system picks from inverse queue; for Geral: system alternates
+    const entryAgency: Agency = isParceria ? 'Externo' : 'Viva Imóveis';
+
     const { data: visitData, error: visitError } = await supabase
       .from('visits')
       .insert({
@@ -108,10 +105,11 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
 
     const { error: queueError } = await supabase.from('queue_entries').insert({
       visit_id: visitData.id,
-      agency,
+      agency: entryAgency,
       queue_status: 'aguardando',
       attempts: 0,
       queue_type: queueType,
+      shift: currentShift,
     });
 
     if (queueError) {
@@ -120,8 +118,8 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
       const successMsg = isParceria
         ? `${customerName.trim()} foi cadastrado como Parceria e será direcionado ao Gerente de Parcerias.`
         : isDecorado
-        ? `${customerName.trim()} foi cadastrado para Visita ao Decorado. O sistema chamará o próximo corretor da fila inversa.`
-        : `${customerName.trim()} foi cadastrado e entrou na fila.`;
+        ? `${customerName.trim()} foi cadastrado para Visita ao Decorado. O sistema chamará o próximo corretor da Fila Inversa.`
+        : `${customerName.trim()} foi cadastrado e entrou na fila. A imobiliária e o corretor serão definidos pelo sistema.`;
 
       setMessage({ type: 'success', text: successMsg });
       setRevealed(true);
@@ -142,21 +140,31 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
     const isParceriaQuick = quickReason === 'Parceria';
     const isDecoradoQuick = quickReason === 'Visita ao Decorado';
     const queueType = isParceriaQuick ? 'parceria' : isDecoradoQuick ? 'decorado' : 'geral';
-    const entryAgency: Agency = isParceriaQuick ? 'Externo' : isDecoradoQuick ? 'Viva Imóveis' : quickAgency;
 
     // Determine referred broker and visit reason for DB
     let referredBrokerId: string | null = null;
-    let dbVisitReason: VisitReason = quickReason as VisitReason;
+    let dbVisitReason: VisitReason = quickReason;
+
+    // Determine which agency the referred broker belongs to (for Rule 2)
+    let targetAgency: Agency = 'Viva Imóveis';
 
     if (isIndicacaoPresente) {
       referredBrokerId = quickBrokerId || null;
       dbVisitReason = 'Indicação';
+      const refBroker = brokers.find((b) => b.id === quickBrokerId);
+      if (refBroker) targetAgency = refBroker.agency;
     } else if (isIndicacaoAusente) {
       referredBrokerId = quickBrokerId || null;
       dbVisitReason = 'Indicação';
+      const refBroker = brokers.find((b) => b.id === quickBrokerId);
+      if (refBroker) targetAgency = refBroker.agency;
     } else if (isIndicacaoImobiliaria) {
       dbVisitReason = 'Indicação';
     }
+
+    // Entry agency: for parceria it's Externo; for indicacao use the referred broker's agency;
+    // for geral/decorado the system will determine at call time
+    const entryAgency: Agency = isParceriaQuick ? 'Externo' : targetAgency;
 
     const { data: visitData, error: visitError } = await supabase
       .from('visits')
@@ -177,25 +185,46 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
 
     // Determine broker assignment for the queue entry
     let assignedBrokerId: string | null = null;
+    const busyIds = new Set<string>(
+      brokers.filter((b) => b.attendance_status === 'em_mesa' || b.attendance_status === 'decorado').map((b) => b.id),
+    );
 
     if (isIndicacaoPresente) {
-      // Rule 1: goes directly to the referred broker, does NOT consume their vez
+      // Rule 5: goes directly to the referred broker, does NOT consume their vez
       const referred = brokers.find((b) => b.id === quickBrokerId);
       if (referred && referred.presence_status === 'presente' && referred.attendance_status === 'livre') {
         assignedBrokerId = referred.id;
       }
     } else if (isIndicacaoAusente) {
-      // Rule 2: referred broker is absent → last available broker of same agency
-      const referred = brokers.find((b) => b.id === quickBrokerId);
-      const targetAgency = referred?.agency ?? quickAgency;
-      const busyIds = new Set<string>();
+      // Rule 6: referred broker is absent → LAST available broker of same agency
       const lastBroker = lastBrokerFromAgency(brokers, targetAgency, busyIds);
       assignedBrokerId = lastBroker?.id ?? null;
     } else if (isIndicacaoImobiliaria) {
-      // Rule 3: only knows agency → last available broker of that agency
-      const busyIds = new Set<string>();
-      const lastBroker = lastBrokerFromAgency(brokers, quickAgency, busyIds);
+      // Rule: only knows agency → last available broker of that agency
+      // Since reception can't pick agency, default to Viva for quick test
+      const lastBroker = lastBrokerFromAgency(brokers, 'Viva Imóveis', busyIds);
       assignedBrokerId = lastBroker?.id ?? null;
+    } else if (isDecoradoQuick) {
+      // Decorado: pick from top of inverse queue
+      const broker = nextBrokerFromInverseTop(brokers, busyIds);
+      assignedBrokerId = broker?.id ?? null;
+    } else if (!isParceriaQuick) {
+      // Geral: if pre-sorteio, use arrival order; else use sorteio intercalation
+      if (isPreSorteio) {
+        const broker = nextBrokerByArrival(brokers, 'Viva Imóveis', busyIds);
+        assignedBrokerId = broker?.id ?? null;
+        if (!assignedBrokerId) {
+          const broker2 = nextBrokerByArrival(brokers, 'Casa Nobre', busyIds);
+          assignedBrokerId = broker2?.id ?? null;
+        }
+      } else {
+        const broker = nextBrokerFromAgency(brokers, 'Viva Imóveis', busyIds);
+        assignedBrokerId = broker?.id ?? null;
+        if (!assignedBrokerId) {
+          const broker2 = nextBrokerFromAgency(brokers, 'Casa Nobre', busyIds);
+          assignedBrokerId = broker2?.id ?? null;
+        }
+      }
     }
 
     const insertData: Record<string, unknown> = {
@@ -216,9 +245,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
         .from('brokers')
         .update({ attendance_status: 'em_mesa', last_status_update: new Date().toISOString() })
         .eq('id', assignedBrokerId);
-      if (visitData.id) {
-        await supabase.from('visits').update({ status: 'aguardando_chamada' }).eq('id', visitData.id);
-      }
+      await supabase.from('visits').update({ status: 'aguardando_chamada' }).eq('id', visitData.id);
     }
 
     setQuickSubmitting(false);
@@ -235,7 +262,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
             </div>
             <div>
               <h2 className="text-lg font-bold text-amber-400">Simular Entrada Rápida</h2>
-              <p className="text-sm text-slate-400">Gera um cliente fictício e envia direto para a fila — para testes de mesa</p>
+              <p className="text-sm text-slate-400">Gera um cliente fictício e envia direto para a fila — funciona em qualquer horário</p>
             </div>
           </div>
           <div className="flex flex-wrap items-end gap-3">
@@ -252,43 +279,34 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
                 <option value="Primeira visita">Vez Geral</option>
                 <option value="Visita ao Decorado">Visita ao Decorado</option>
                 <option value="Parceria">Parceria</option>
-                <option value="Indicação Presente">Indicação: Sabe Corretor (Presente)</option>
-                <option value="Indicação Ausente">Indicação: Sabe Corretor (Ausente)</option>
-                <option value="Indicação Imobiliária">Indicação: Sabe Apenas a Imobiliária</option>
+                <option value="Indicação Presente">Indicação: Corretor Presente</option>
+                <option value="Indicação Ausente">Indicação: Corretor Ausente</option>
+                <option value="Indicação Imobiliária">Indicação: Só a Imobiliária</option>
               </select>
             </div>
 
-            {needsAgencySelect && (
-              <div className="min-w-[140px]">
-                <label className="block text-xs text-slate-400 mb-1">Imobiliária</label>
-                <select
-                  value={quickAgency}
-                  onChange={(e) => { setQuickAgency(e.target.value as Agency); setQuickBrokerId(''); }}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
-                >
-                  <option value="Viva Imóveis">Viva Imóveis</option>
-                  <option value="Casa Nobre">Casa Nobre</option>
-                </select>
-              </div>
-            )}
-
             {needsBrokerSelect && (
-              <div className="min-w-[180px]">
-                <label className="block text-xs text-slate-400 mb-1">Corretor indicado</label>
+              <div className="min-w-[220px]">
+                <label className="block text-xs text-slate-400 mb-1">
+                  {isIndicacaoPresente ? 'Corretor presente (todos os presentes)' : 'Corretor indicado (ausente)'}
+                </label>
                 <select
                   value={quickBrokerId}
                   onChange={(e) => setQuickBrokerId(e.target.value)}
                   className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
                 >
                   <option value="">Selecione um corretor…</option>
-                  {(isIndicacaoAusente ? availableBrokersForQuick : presentBrokersForQuick).map((b) => (
+                  {(isIndicacaoPresente ? presentBrokers : allInternalBrokers.filter((b) => b.presence_status === 'ausente')).map((b) => (
                     <option key={b.id} value={b.id}>
-                      {b.operational_name} {b.presence_status === 'presente' ? '(Presente)' : '(Ausente)'}
+                      {b.operational_name} ({b.agency}) {b.presence_status === 'presente' ? '· Presente' : '· Ausente'}
                     </option>
                   ))}
                 </select>
-                {isIndicacaoAusente && availableBrokersForQuick.length === 0 && (
-                  <p className="text-xs text-slate-500 mt-1">Nenhum corretor cadastrado nesta imobiliária.</p>
+                {isIndicacaoPresente && presentBrokers.length === 0 && (
+                  <p className="text-xs text-slate-500 mt-1">Nenhum corretor marcou presença ainda.</p>
+                )}
+                {isIndicacaoAusente && allInternalBrokers.filter((b) => b.presence_status === 'ausente').length === 0 && (
+                  <p className="text-xs text-slate-500 mt-1">Nenhum corretor ausente para indicar.</p>
                 )}
               </div>
             )}
@@ -309,19 +327,19 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
               {isIndicacaoPresente && (
                 <span className="flex items-center gap-1.5 text-xs bg-emerald-500/10 text-emerald-400 px-3 py-1.5 rounded-lg">
                   <UserCheck className="h-3.5 w-3.5" />
-                  Regra 1: Vai direto ao corretor. Não consome a vez na roleta.
+                  Regra 5: Vai direto ao corretor presente. Mantém a posição na fila geral.
                 </span>
               )}
               {isIndicacaoAusente && (
                 <span className="flex items-center gap-1.5 text-xs bg-orange-500/10 text-orange-400 px-3 py-1.5 rounded-lg">
                   <UserX className="h-3.5 w-3.5" />
-                  Regra 2: Corretor ausente → último disponível da mesma imobiliária. Consome a vez.
+                  Regra 6: Corretor ausente → último disponível da mesma imobiliária. Consome a vez.
                 </span>
               )}
               {isIndicacaoImobiliaria && (
                 <span className="flex items-center gap-1.5 text-xs bg-sky-500/10 text-sky-400 px-3 py-1.5 rounded-lg">
                   <Building2 className="h-3.5 w-3.5" />
-                  Regra 3: Só a marca → último disponível da imobiliária. Consome a vez.
+                  Regra: Só a marca → último disponível da imobiliária. Consome a vez.
                 </span>
               )}
             </div>
@@ -335,7 +353,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
             </div>
             <div>
               <h2 className="text-xl font-bold">Cadastro de Chegada</h2>
-              <p className="text-sm text-slate-400">Registre o cliente e envie para a fila</p>
+              <p className="text-sm text-slate-400">Registre o cliente — a imobiliária e o corretor são definidos pelo sistema</p>
             </div>
           </div>
 
@@ -381,34 +399,20 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
               )}
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-1.5">Motivo da visita</label>
-                <select
-                  value={reason}
-                  onChange={(e) => handleReasonChange(e.target.value as VisitReason)}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-amber-500 transition"
-                >
-                  {REASONS.map((r) => (
-                    <option key={r} value={r}>{r}</option>
-                  ))}
-                </select>
-              </div>
-
-              {!isParceria && !isDecorado && (
-                <div>
-                  <label className="block text-sm font-medium text-slate-300 mb-1.5">Imobiliária da fila</label>
-                  <select
-                    value={agency}
-                    onChange={(e) => setAgency(e.target.value as Agency)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-amber-500 transition"
-                  >
-                    <option value="Viva Imóveis">Viva Imóveis</option>
-                    <option value="Casa Nobre">Casa Nobre</option>
-                  </select>
-                </div>
-              )}
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-1.5">Motivo da visita</label>
+              <select
+                value={reason}
+                onChange={(e) => handleReasonChange(e.target.value as VisitReason)}
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-amber-500 transition"
+              >
+                {REASONS.map((r) => (
+                  <option key={r} value={r}>{r}</option>
+                ))}
+              </select>
             </div>
+
+            {/* NO AGENCY SELECTOR — completely hidden from reception */}
 
             {isParceria && (
               <div className="bg-sky-500/5 border border-sky-500/20 rounded-xl p-4 space-y-3">
@@ -457,8 +461,8 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
                   className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-amber-500 transition"
                 >
                   <option value="">Sem corretor específico</option>
-                  {agencyBrokers.map((b) => (
-                    <option key={b.id} value={b.id}>{b.operational_name}</option>
+                  {presentBrokers.map((b) => (
+                    <option key={b.id} value={b.id}>{b.operational_name} ({b.agency})</option>
                   ))}
                 </select>
               </div>
@@ -467,14 +471,14 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
             {!revealed && !isParceria && !isDecorado && (
               <div className="flex items-center gap-2 text-xs text-slate-500 bg-slate-800/40 rounded-lg p-2.5">
                 <EyeOff className="h-4 w-4 shrink-0" />
-                <span>A imobiliária e o corretor da vez são ocultados até o cadastro ser concluído.</span>
+                <span>A imobiliária e o corretor da vez são ocultados até o cadastro ser concluído. O sistema define tudo automaticamente.</span>
               </div>
             )}
 
             {revealed && message?.type === 'success' && !isParceria && !isDecorado && (
               <div className="flex items-center gap-2 text-xs text-emerald-400 bg-emerald-500/10 rounded-lg p-2.5">
                 <Eye className="h-4 w-4 shrink-0" />
-                <span>Cliente na fila da <strong>{agency}</strong>. O corretor da vez será definido no Motor da Fila.</span>
+                <span>Cliente na fila. O corretor da vez será definido pelo Motor da Fila.</span>
               </div>
             )}
 

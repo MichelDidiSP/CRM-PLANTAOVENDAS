@@ -1,6 +1,6 @@
 import { Bell, CircleCheck as CheckCircle2, Eye, ArrowLeftRight, Clock, TriangleAlert as AlertTriangle, UserCheck, History, Chrome as Home, Repeat, Sun, Moon } from 'lucide-react';
 import { supabase, type Broker, type QueueEntry, type Agency } from '@/lib/supabase';
-import { isLateForSort, interleaveQueue, reverseInterleaveQueue, nextBrokerFromInverseQueue, nextBrokerForGeneralQueue, nextBrokerByArrival } from '@/lib/queueEngine';
+import { isLateForSort, interleaveQueue, reverseInterleaveQueue, nextBrokerFromInverseQueue, nextBrokerForGeneralQueue, nextBrokerByArrival, nextBrokerFromInverseTop, moveBrokerToEndOfQueue } from '@/lib/queueEngine';
 import { useSim } from '@/lib/simContext';
 
 type Props = {
@@ -100,7 +100,7 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
   }
 
   async function callDecorado(entry: QueueEntry) {
-    const broker = nextBrokerFromInverseQueue(brokers, queue);
+    const broker = nextBrokerFromInverseTop(brokers, busyBrokerIds);
     await updateEntryToCalling(entry, broker?.id ?? null);
   }
 
@@ -141,12 +141,19 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
   }
 
   async function conclude(entry: QueueEntry) {
+    const wasIndicacaoPresente = entry.visit?.referred_broker_id != null && entry.visit?.visit_reason === 'Indicação';
+
     await supabase.from('queue_entries').update({ queue_status: 'concluido', updated_at: new Date().toISOString() }).eq('id', entry.id);
     if (entry.visit_id) {
       await supabase.from('visits').update({ status: 'encerrado' }).eq('id', entry.visit_id);
     }
     if (entry.broker_id) {
       await supabase.from('brokers').update({ attendance_status: 'livre', last_status_update: new Date().toISOString() }).eq('id', entry.broker_id);
+      // Rule 3: Vez Geral — move broker to END of queue (consumes their vez, fila walks forward)
+      // Rule 5: Indicação Presente — broker KEEPS their position, do NOT move to end
+      if (!wasIndicacaoPresente && entry.queue_type === 'geral') {
+        await moveBrokerToEndOfQueue(entry.broker_id, brokers);
+      }
     }
   }
 

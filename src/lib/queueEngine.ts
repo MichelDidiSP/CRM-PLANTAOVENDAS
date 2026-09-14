@@ -34,7 +34,9 @@ export function sanitizePhone(input: string): string {
 }
 
 export const AGENCIES: Agency[] = ['Viva Imóveis', 'Casa Nobre'];
-export const REASONS: VisitReason[] = ['Primeira visita', 'Retorno', 'Indicação', 'Parceria', 'Visita ao Decorado', 'Indicação Presente', 'Indicação Ausente', 'Indicação Imobiliária'];
+export const REASONS: VisitReason[] = ['Primeira visita', 'Retorno', 'Indicação', 'Parceria', 'Visita ao Decorado'];
+
+export const QUICK_REASONS: VisitReason[] = ['Primeira visita', 'Retorno', 'Indicação', 'Parceria', 'Visita ao Decorado', 'Indicação Presente', 'Indicação Ausente', 'Indicação Imobiliária'];
 export const QUEUE_TYPES: QueueType[] = ['geral', 'decorado', 'parceria'];
 
 function shuffleArray<T>(arr: T[]): T[] {
@@ -342,6 +344,36 @@ export function lastBrokerFromAgency(brokers: Broker[], agency: Agency, excludeI
     .sort((a, b) => (b.sorteio_order ?? 0) - (a.sorteio_order ?? 0));
 
   return agencyBrokers[0];
+}
+
+/**
+ * Move broker to end of queue: assigns the highest sorteio_order + 1 among
+ * same-agency brokers, effectively sending them to the back of their agency's
+ * internal queue. This makes the fila walk forward.
+ */
+export async function moveBrokerToEndOfQueue(brokerId: string, brokers: Broker[]): Promise<void> {
+  const broker = brokers.find((b) => b.id === brokerId);
+  if (!broker) return;
+  const sameAgency = brokers.filter((b) => !b.is_external_partner && b.agency === broker.agency && b.sorteio_order != null);
+  const maxOrder = sameAgency.length > 0 ? Math.max(...sameAgency.map((b) => b.sorteio_order ?? 0)) : 0;
+  await supabase
+    .from('brokers')
+    .update({ sorteio_order: maxOrder + 1, last_status_update: new Date().toISOString() })
+    .eq('id', brokerId);
+}
+
+/**
+ * Visita ao Decorado: picks the first available broker from the TOP of the
+ * INVERSE queue (which is the LAST broker of the general queue by sorteio_order).
+ * The inverse queue runs in the opposite direction — the last broker in the
+ * general queue is the first to be called for decorado.
+ * Excludes brokers currently busy (calling, em_atendimento).
+ */
+export function nextBrokerFromInverseTop(brokers: Broker[], excludeIds: Set<string>): Broker | undefined {
+  const available = brokers
+    .filter((b) => !b.is_external_partner && b.presence_status === 'presente' && b.attendance_status === 'livre' && !excludeIds.has(b.id))
+    .sort((a, b) => (b.sorteio_order ?? 999) - (a.sorteio_order ?? 999));
+  return available[0];
 }
 
 export function nextBrokerFromInverseQueue(brokers: Broker[], sortedQueue: QueueEntry[]): Broker | undefined {

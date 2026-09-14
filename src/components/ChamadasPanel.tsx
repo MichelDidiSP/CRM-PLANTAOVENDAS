@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { Volume2, VolumeX, Timer, Users, Building2, Zap, Home, ArrowLeftRight, AlertTriangle } from 'lucide-react';
-import { supabase, type Broker, type QueueEntry } from '@/lib/supabase';
-import { formatTime } from '@/lib/queueEngine';
+import { Volume2, VolumeX, Timer, Users, Building2, Zap, Chrome as Home, ArrowLeftRight, TriangleAlert as AlertTriangle } from 'lucide-react';
+import { supabase, type Broker, type QueueEntry, type Agency } from '@/lib/supabase';
+import { formatTime, nextBrokerFromInverseTop, nextBrokerFromAgency, nextBrokerByArrival } from '@/lib/queueEngine';
 import { useSim } from '@/lib/simContext';
 
 type Props = {
@@ -109,30 +109,23 @@ export default function ChamadasPanel({ queue, brokers }: Props) {
       const entry = refreshedQueue as QueueEntry;
       let nextBrokerId: string | null = null;
 
+      const busyIds = new Set(
+        brokers.filter((b) => b.attendance_status === 'em_mesa' || b.attendance_status === 'decorado').map((b) => b.id),
+      );
+
       if (entry.queue_type === 'decorado') {
-        // Fila inversa: próximo corretor disponível do topo da inversa
-        const reversed = [...queue].reverse();
-        for (const e of reversed) {
-          if (e.broker_id) {
-            const b = brokers.find((bk) => bk.id === e.broker_id);
-            if (b && !b.is_external_partner && b.presence_status === 'presente' && b.attendance_status === 'livre') {
-              nextBrokerId = b.id;
-              break;
-            }
-          }
-        }
-        if (!nextBrokerId) {
-          nextBrokerId = brokers.find(
-            (b) => !b.is_external_partner && b.presence_status === 'presente' && b.attendance_status === 'livre',
-          )?.id ?? null;
-        }
+        // Fila inversa: primeiro corretor disponível do topo da inversa
+        const broker = nextBrokerFromInverseTop(brokers, busyIds);
+        nextBrokerId = broker?.id ?? null;
       } else if (entry.queue_type === 'parceria') {
         nextBrokerId = null;
       } else {
         // Fila geral: próximo corretor livre da mesma imobiliária
-        const available = brokers.find(
-          (b) => !b.is_external_partner && b.agency === entry.agency && b.presence_status === 'presente' && b.attendance_status === 'livre',
-        );
+        let available = nextBrokerFromAgency(brokers, entry.agency, busyIds);
+        if (!available) {
+          const otherAgency: Agency = entry.agency === 'Viva Imóveis' ? 'Casa Nobre' : 'Viva Imóveis';
+          available = nextBrokerFromAgency(brokers, otherAgency, busyIds);
+        }
         nextBrokerId = available?.id ?? null;
       }
 
