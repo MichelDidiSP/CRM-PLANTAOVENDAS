@@ -1,6 +1,7 @@
-import { Bell, CheckCircle2, Eye, ArrowLeftRight, Clock, AlertTriangle, UserCheck, History, Home } from 'lucide-react';
-import { supabase, type Broker, type QueueEntry } from '@/lib/supabase';
-import { isLateForSort, interleaveQueue, reverseInterleaveQueue, nextBrokerFromInverseQueue } from '@/lib/queueEngine';
+import { Bell, CircleCheck as CheckCircle2, Eye, ArrowLeftRight, Clock, TriangleAlert as AlertTriangle, UserCheck, History, Chrome as Home, Repeat, Sun, Moon } from 'lucide-react';
+import { supabase, type Broker, type QueueEntry, type Agency } from '@/lib/supabase';
+import { isLateForSort, interleaveQueue, reverseInterleaveQueue, nextBrokerFromInverseQueue, nextBrokerForGeneralQueue, nextBrokerByArrival } from '@/lib/queueEngine';
+import { useSim } from '@/lib/simContext';
 
 type Props = {
   queue: QueueEntry[];
@@ -9,6 +10,7 @@ type Props = {
 };
 
 export default function FilaPanel({ queue, brokers, allQueue }: Props) {
+  const { isPreSorteio, currentShift } = useSim();
   const waiting = queue.filter((e) => e.queue_status === 'aguardando');
   const calling = allQueue.filter((e) => e.queue_status === 'chamando');
   const inAttendance = allQueue.filter((e) => e.queue_status === 'em_atendimento');
@@ -25,6 +27,13 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
   const reverseQueue = reverseInterleaveQueue(allQueue, brokers);
   const reverseWaiting = reverseQueue.filter((e) => e.queue_status === 'aguardando');
 
+  const busyBrokerIds = new Set(
+    allQueue
+      .filter((e) => e.queue_status === 'chamando' || e.queue_status === 'em_atendimento')
+      .map((e) => e.broker_id)
+      .filter((id): id is string => id != null),
+  );
+
   async function updateEntryToCalling(entry: QueueEntry, brokerId: string | null) {
     const attempts = entry.attempts + 1;
     await supabase
@@ -39,16 +48,55 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
     }
   }
 
+  /**
+   * Infinite Intercalation call: alternates agencies.
+   * Pre-sorteio: uses arrival order instead of sorteio_order.
+   */
   async function callNext(entry: QueueEntry) {
     const referredBrokerId = entry.visit?.referred_broker_id ?? null;
-    let brokerId: string | null = referredBrokerId;
-    if (!brokerId) {
-      const availableBroker = brokers.find(
-        (b) => !b.is_external_partner && b.agency === entry.agency && b.presence_status === 'presente' && b.attendance_status === 'livre',
-      );
-      brokerId = availableBroker?.id ?? null;
+
+    if (isPreSorteio) {
+      // Pre-sorteio: first available broker by arrival order from the same agency
+      const broker = nextBrokerByArrival(brokers, entry.agency, busyBrokerIds);
+      await updateEntryToCalling(entry, broker?.id ?? null);
+      return;
     }
-    await updateEntryToCalling(entry, brokerId);
+
+    if (referredBrokerId) {
+      const referredBroker = brokers.find((b) => b.id === referredBrokerId);
+      if (referredBroker && referredBroker.presence_status === 'presente' && referredBroker.attendance_status === 'livre' && !busyBrokerIds.has(referredBroker.id)) {
+        await updateEntryToCalling(entry, referredBrokerId);
+        return;
+      }
+    }
+
+    // Infinite intercalation: pick next broker respecting alternation
+    const lastCalledAgency = await getLastCalledAgency();
+    const { broker } = nextBrokerForGeneralQueue(brokers, lastCalledAgency, busyBrokerIds);
+    await updateEntryToCalling(entry, broker?.id ?? null);
+
+    // Update last_called_agency in session
+    if (broker) {
+      await updateLastCalledAgency(broker.agency);
+    }
+  }
+
+  async function getLastCalledAgency(): Promise<Agency | null> {
+    const { data } = await supabase
+      .from('plantao_sessions')
+      .select('last_called_agency')
+      .eq('status', 'active')
+      .order('started_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    return (data?.last_called_agency as Agency) ?? null;
+  }
+
+  async function updateLastCalledAgency(agency: Agency) {
+    await supabase
+      .from('plantao_sessions')
+      .update({ last_called_agency: agency })
+      .eq('status', 'active');
   }
 
   async function callDecorado(entry: QueueEntry) {
@@ -114,15 +162,17 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
 
   return (
     <div className="space-y-6">
+      {/* Infinite intercalation info */}
       <div className="bg-slate-900 rounded-2xl border border-slate-800 p-5">
         <div className="flex items-start gap-3">
-          <ArrowLeftRight className="h-5 w-5 text-amber-400 shrink-0 mt-0.5" />
+          <Repeat className="h-5 w-5 text-amber-400 shrink-0 mt-0.5" />
           <div className="text-sm text-slate-300 space-y-1">
-            <p><strong className="text-white">Intercalação:</strong> as listas de Viva Imóveis e Casa Nobre são mescladas alternadamente para formar a Fila Geral.</p>
+            <p><strong className="text-white">Intercalação Institucional Infinita:</strong> Viva → Nobre → Viva → Nobre… até o fim do plantão. Uma marca nunca atende duas vezes seguidas. Quando a menor lista esgota, os corretores reentram no topo da sua lista interna.</p>
+            <p><strong className="text-white">Turno {currentShift === 'manha' ? 'Manhã' : 'Tarde'}:</strong> {currentShift === 'manha' ? <Sun className="inline h-3 w-3 text-amber-400" /> : <Moon className="inline h-3 w-3 text-indigo-400" />} Atendimento {currentShift === 'manha' ? '09:00–13:59' : '14:00–19:00'}.</p>
+            {isPreSorteio && <p className="text-sky-400"><strong>Período Pré-Sorteio:</strong> Atendimento por ordem de chegada — sem roleta.</p>}
             <p><strong className="text-white">Visita ao Decorado:</strong> chama o primeiro corretor disponível do topo da Fila Inversa Geral.</p>
-            <p><strong className="text-white">Transbordo:</strong> após 3 chamadas sem comparecimento, o corretor é pausado e o sistema chama automaticamente o próximo. O cliente continua ativo.</p>
+            <p><strong className="text-white">Transbordo:</strong> após 3 chamadas sem comparecimento, o corretor é pausado e o sistema chama automaticamente o próximo.</p>
             <p><strong className="text-white">Parceria:</strong> direcione ao Gerente de Parcerias, sem consumir vez da fila geral.</p>
-            <p><strong className="text-white">Penalização:</strong> chegadas após 08:45:59 perdem prioridade e vão para o fim do seu grupo.</p>
           </div>
         </div>
       </div>
@@ -132,7 +182,7 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
           <div className="flex items-center gap-4">
             <div className="bg-amber-500/20 p-3 rounded-xl"><Bell className="h-6 w-6 text-amber-400" /></div>
             <div>
-              <p className="text-xs uppercase tracking-wide text-slate-400">Próximo da Fila Geral</p>
+              <p className="text-xs uppercase tracking-wide text-slate-400">Próximo da Fila Geral {isPreSorteio && '· Ordem de Chegada'}</p>
               <p className="text-xl font-bold text-white">{nextEntry.visit?.customer_name ?? '—'}</p>
               <p className="text-sm text-slate-400">{nextEntry.agency} · {nextEntry.visit?.visit_reason}</p>
             </div>
@@ -179,7 +229,7 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
         <Section title="Chamando agora — aguardando presença do corretor" icon={<Bell className="h-5 w-5 text-amber-400" />} count={calling.length}>
           {calling.map((entry) => {
             const broker = entry.broker_id ? brokers.find((b) => b.id === entry.broker_id) : undefined;
-            const late = broker ? isLateForSort(broker.arrived_at) : false;
+            const late = broker ? isLateForSort(broker.arrived_at, broker.shift ?? currentShift) : false;
             const queueLabel = entry.queue_type === 'decorado' ? 'Decorado' : entry.queue_type === 'parceria' ? 'Parceria' : 'Geral';
             return (
               <QueueRow key={entry.id} entry={entry} brokerName={broker?.operational_name} late={late} queueLabel={queueLabel}>
@@ -192,13 +242,13 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
         </Section>
       )}
 
-      <Section title="Fila de espera — Geral" icon={<Clock className="h-5 w-5 text-slate-400" />} count={geralWaiting.length}>
+      <Section title={`Fila de espera — Geral ${isPreSorteio ? '(Ordem de Chegada)' : '(Intercalação Infinita)'}`} icon={<Clock className="h-5 w-5 text-slate-400" />} count={geralWaiting.length}>
         {geralWaiting.length === 0 ? (
           <p className="text-sm text-slate-500 text-center py-6">Ninguém aguardando na fila geral.</p>
         ) : (
           geralWaiting.map((entry, i) => {
             const broker = entry.broker_id ? brokers.find((b) => b.id === entry.broker_id) : undefined;
-            const late = broker ? isLateForSort(broker.arrived_at) : false;
+            const late = broker ? isLateForSort(broker.arrived_at, broker.shift ?? currentShift) : false;
             return (
               <QueueRow key={entry.id} entry={entry} position={i + 1} brokerName={broker?.operational_name} late={late}>
                 <button onClick={() => callNext(entry)} className="action-btn bg-amber-500 hover:bg-amber-400 text-slate-950"><Bell className="h-4 w-4" /> Chamar</button>

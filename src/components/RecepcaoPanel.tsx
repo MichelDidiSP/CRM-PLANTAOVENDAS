@@ -1,7 +1,8 @@
-import { useState } from 'react';
-import { UserPlus, Phone, AlertTriangle, CheckCircle2, Clock, Search, EyeOff, Eye } from 'lucide-react';
-import { supabase, type Broker, type Visit, type VisitReason, type Agency } from '@/lib/supabase';
+import { useState, useRef } from 'react';
+import { UserPlus, Phone, TriangleAlert as AlertTriangle, CircleCheck as CheckCircle2, Clock, Search, EyeOff, Eye, Zap } from 'lucide-react';
+import { supabase, type Broker, type Visit, type VisitReason, type Agency, type Shift } from '@/lib/supabase';
 import { REASONS, sanitizePhone, formatPhoneDisplay } from '@/lib/queueEngine';
+import { useSim } from '@/lib/simContext';
 
 type Props = {
   brokers: Broker[];
@@ -18,6 +19,11 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
   const [submitting, setSubmitting] = useState(false);
   const [searchPhone, setSearchPhone] = useState('');
   const [revealed, setRevealed] = useState(false);
+  const { currentShift } = useSim();
+  const [quickReason, setQuickReason] = useState<VisitReason>('Primeira visita');
+  const [quickAgency, setQuickAgency] = useState<Agency>('Viva Imóveis');
+  const [quickSubmitting, setQuickSubmitting] = useState(false);
+  const quickCounterRef = useRef(0);
 
   const normalizedPhone = sanitizePhone(phone);
   const duplicate = visits.find((v) => v.phone === normalizedPhone && v.status !== 'encerrado' && normalizedPhone.length > 0);
@@ -109,9 +115,98 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
     setSubmitting(false);
   }
 
+  async function handleQuickEntry() {
+    setQuickSubmitting(true);
+    quickCounterRef.current += 1;
+    const seq = quickCounterRef.current;
+    const fakeName = `Cliente Rápido #${seq}`;
+    const fakePhone = `119${String(90000000 + seq).padStart(8, '0')}`;
+
+    const isParceriaQuick = quickReason === 'Parceria';
+    const isDecoradoQuick = quickReason === 'Visita ao Decorado';
+    const queueType = isParceriaQuick ? 'parceria' : isDecoradoQuick ? 'decorado' : 'geral';
+    const entryAgency = isParceriaQuick ? 'Externo' : isDecoradoQuick ? 'Viva Imóveis' : quickAgency;
+
+    const { data: visitData, error: visitError } = await supabase
+      .from('visits')
+      .insert({
+        customer_name: fakeName,
+        phone: fakePhone,
+        visit_reason: quickReason,
+        status: 'aguardando',
+      })
+      .select()
+      .single();
+
+    if (visitError || !visitData) {
+      setQuickSubmitting(false);
+      return;
+    }
+
+    await supabase.from('queue_entries').insert({
+      visit_id: visitData.id,
+      agency: entryAgency,
+      queue_status: 'aguardando',
+      attempts: 0,
+      queue_type: queueType,
+      shift: currentShift,
+    });
+
+    setQuickSubmitting(false);
+  }
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
       <div className="lg:col-span-3">
+        {/* Simular Entrada Rápida */}
+        <div className="bg-gradient-to-r from-amber-500/10 to-orange-500/10 rounded-2xl border border-amber-500/30 p-5 mb-4">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="bg-amber-500/20 p-2.5 rounded-xl">
+              <Zap className="h-6 w-6 text-amber-400" />
+            </div>
+            <div>
+              <h2 className="text-lg font-bold text-amber-400">Simular Entrada Rápida</h2>
+              <p className="text-sm text-slate-400">Gera um cliente fictício e envia direto para a fila — para testes de mesa</p>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="min-w-[160px]">
+              <label className="block text-xs text-slate-400 mb-1">Motivo</label>
+              <select
+                value={quickReason}
+                onChange={(e) => setQuickReason(e.target.value as VisitReason)}
+                className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+              >
+                <option value="Primeira visita">Vez Geral</option>
+                <option value="Visita ao Decorado">Visita ao Decorado</option>
+                <option value="Parceria">Parceria</option>
+                <option value="Indicação">Indicação de Ausente</option>
+              </select>
+            </div>
+            {quickReason !== 'Parceria' && quickReason !== 'Visita ao Decorado' && (
+              <div className="min-w-[140px]">
+                <label className="block text-xs text-slate-400 mb-1">Imobiliária</label>
+                <select
+                  value={quickAgency}
+                  onChange={(e) => setQuickAgency(e.target.value as Agency)}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                >
+                  <option value="Viva Imóveis">Viva Imóveis</option>
+                  <option value="Casa Nobre">Casa Nobre</option>
+                </select>
+              </div>
+            )}
+            <button
+              onClick={handleQuickEntry}
+              disabled={quickSubmitting}
+              className="flex items-center gap-2 bg-amber-500 hover:bg-amber-400 disabled:bg-slate-700 text-slate-950 font-bold px-5 py-2.5 rounded-xl transition"
+            >
+              <Zap className="h-5 w-5" />
+              {quickSubmitting ? 'Enviando…' : 'Simular Entrada Rápida'}
+            </button>
+          </div>
+        </div>
+
         <div className="bg-slate-900 rounded-2xl border border-slate-800 p-6">
           <div className="flex items-center gap-3 mb-6">
             <div className="bg-amber-500/10 p-3 rounded-xl">

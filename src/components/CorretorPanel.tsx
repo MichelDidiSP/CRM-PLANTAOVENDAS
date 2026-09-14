@@ -1,13 +1,13 @@
 import { useState } from 'react';
-import { UserCheck, UserX, Clock, Coffee, Table2, Home, CheckCircle, Plus, Trash2, ExternalLink, Users2 } from 'lucide-react';
-import { supabase, type Broker, type BrokerPresence, type AttendanceStatus, type Agency } from '@/lib/supabase';
+import { UserCheck, UserX, Clock, Coffee, Table2, Chrome as Home, CircleCheck as CheckCircle, Plus, Trash2, ExternalLink, Users as Users2, Sun, Moon, Bookmark } from 'lucide-react';
+import { supabase, type Broker, type BrokerPresence, type AttendanceStatus, type Agency, type Shift } from '@/lib/supabase';
 import { AGENCIES, isLateForSort } from '@/lib/queueEngine';
 import { useSim } from '@/lib/simContext';
 
 type Props = { brokers: Broker[] };
 
 export default function CorretorPanel({ brokers }: Props) {
-  const { getCurrentTime, clockDisplay } = useSim();
+  const { getCurrentTime, clockDisplay, currentShift, isCheckinOpen, isPreSorteio } = useSim();
   const [showAdd, setShowAdd] = useState(false);
   const [showAddPartner, setShowAddPartner] = useState(false);
   const [newName, setNewName] = useState('');
@@ -21,12 +21,13 @@ export default function CorretorPanel({ brokers }: Props) {
 
   const present = internalBrokers.filter((b) => b.presence_status !== 'ausente');
   const absent = internalBrokers.filter((b) => b.presence_status === 'ausente');
-  const lateCount = present.filter((b) => isLateForSort(b.arrived_at)).length;
+  const lateCount = present.filter((b) => isLateForSort(b.arrived_at, b.shift ?? currentShift)).length;
+  const reservedCount = internalBrokers.filter((b) => b.afternoon_reserved).length;
 
   async function updatePresence(broker: Broker, status: BrokerPresence) {
     const now = getCurrentTime().toISOString();
     const updates: Partial<Broker> & { last_status_update: string } = { presence_status: status, last_status_update: now };
-    if (status === 'presente' && !broker.arrived_at) { updates.arrived_at = now; }
+    if (status === 'presente' && !broker.arrived_at) { updates.arrived_at = now; updates.shift = currentShift; }
     await supabase.from('brokers').update(updates).eq('id', broker.id);
   }
 
@@ -54,21 +55,28 @@ export default function CorretorPanel({ brokers }: Props) {
     await supabase.from('brokers').delete().eq('id', id);
   }
 
+  const sorteioTime = currentShift === 'manha' ? '08:46:00' : '13:46:00';
+  const checkinLabel = currentShift === 'manha' ? '08:00–08:45:59' : '13:00–13:45:59';
+
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
         <SummaryCard icon={<UserCheck className="h-5 w-5" />} label="Presentes" value={present.length} color="text-emerald-400" />
         <SummaryCard icon={<UserX className="h-5 w-5" />} label="Ausentes" value={absent.length} color="text-slate-400" />
         <SummaryCard icon={<Clock className="h-5 w-5" />} label="Atrasados" value={lateCount} color="text-red-400" />
         <SummaryCard icon={<Coffee className="h-5 w-5" />} label="Em pausa" value={present.filter((b) => b.presence_status === 'pausa').length} color="text-amber-400" />
         <SummaryCard icon={<ExternalLink className="h-5 w-5" />} label="Parceiros" value={partnerBrokersList.length} color="text-sky-400" />
+        <SummaryCard icon={<Bookmark className="h-5 w-5" />} label="Vagas reservadas" value={reservedCount} color="text-indigo-400" />
       </div>
 
+      {/* Shift info banner */}
       <div className="bg-slate-900 rounded-2xl border border-slate-800 p-4 flex items-center gap-3">
-        <Clock className="h-5 w-5 text-amber-400 shrink-0" />
+        {currentShift === 'manha' ? <Sun className="h-5 w-5 text-amber-400 shrink-0" /> : <Moon className="h-5 w-5 text-indigo-400 shrink-0" />}
         <p className="text-sm text-slate-300">
-          <strong className="text-white">Limite para sorteio:</strong> 08:45:59. Corretores que chegam após este horário perdem prioridade na fila e vão para o final.
-          <span className="block mt-1 text-amber-400">Relógio do plantão: {clockDisplay} — a marcação de presença usa esta hora.</span>
+          <strong className="text-white">Turno {currentShift === 'manha' ? 'Manhã' : 'Tarde'}:</strong> Check-in válido de {checkinLabel}. Sorteio automático às <strong className="text-amber-400">{sorteioTime}</strong>.
+          {isPreSorteio && <span className="block mt-1 text-sky-400">Período Pré-Sorteio ativo — atendimento por ordem de chegada.</span>}
+          {!isCheckinOpen && !isPreSorteio && <span className="block mt-1 text-slate-500">Check-in fechado neste horário.</span>}
+          <span className="block mt-1 text-amber-400">Relógio do plantão: {clockDisplay}</span>
         </p>
       </div>
 
@@ -119,14 +127,18 @@ export default function CorretorPanel({ brokers }: Props) {
         <h3 className="text-sm font-bold text-slate-300 mb-3 flex items-center gap-2"><Users2 className="h-4 w-4" /> Corretores internos</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {internalBrokers.map((broker) => {
-            const late = broker.presence_status === 'presente' && isLateForSort(broker.arrived_at);
+            const late = broker.presence_status === 'presente' && isLateForSort(broker.arrived_at, broker.shift ?? currentShift);
             return (
               <div key={broker.id} className="bg-slate-900 rounded-2xl border border-slate-800 p-5">
                 <div className="flex items-start justify-between mb-4">
                   <div>
                     <h3 className="font-bold text-white text-lg">{broker.operational_name}</h3>
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${broker.agency === 'Viva Imóveis' ? 'bg-amber-500/15 text-amber-400' : 'bg-sky-500/15 text-sky-400'}`}>{broker.agency}</span>
-                    {late && <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-red-500/15 text-red-400">Atrasado</span>}
+                    <div className="flex items-center gap-2 mt-1 flex-wrap">
+                      <span className={`text-xs px-2 py-0.5 rounded-full ${broker.agency === 'Viva Imóveis' ? 'bg-amber-500/15 text-amber-400' : 'bg-sky-500/15 text-sky-400'}`}>{broker.agency}</span>
+                      {late && <span className="text-xs px-2 py-0.5 rounded-full bg-red-500/15 text-red-400">Atrasado</span>}
+                      {broker.afternoon_reserved && <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-400">Vaga reservada tarde</span>}
+                      {broker.shift && <span className={`text-xs px-2 py-0.5 rounded-full ${broker.shift === 'manha' ? 'bg-amber-500/15 text-amber-400' : 'bg-indigo-500/15 text-indigo-400'}`}>{broker.shift === 'manha' ? 'Manhã' : 'Tarde'}</span>}
+                    </div>
                     {broker.arrived_at && <p className="text-xs text-slate-500 mt-1">Chegada: {new Date(broker.arrived_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</p>}
                   </div>
                   <button onClick={() => removeBroker(broker.id)} className="text-slate-600 hover:text-red-400 transition p-1" title="Remover corretor"><Trash2 className="h-4 w-4" /></button>

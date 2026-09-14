@@ -10,6 +10,7 @@ export type VisitReason = 'Primeira visita' | 'Retorno' | 'Indicação' | 'Parce
 export type BrokerPresence = 'ausente' | 'presente' | 'pausa';
 export type AttendanceStatus = 'livre' | 'em_mesa' | 'decorado' | 'encerrado' | 'parceiro';
 export type QueueType = 'geral' | 'decorado' | 'parceria';
+export type Shift = 'manha' | 'tarde';
 
 export type Broker = {
   id: string;
@@ -22,6 +23,9 @@ export type Broker = {
   is_external_partner: boolean;
   external_company: string | null;
   sorteio_order: number | null;
+  shift: Shift | null;
+  afternoon_reserved: boolean;
+  created_at: string;
 };
 
 export type Visit = {
@@ -32,6 +36,7 @@ export type Visit = {
   referred_broker_id: string | null;
   status: 'aguardando' | 'aguardando_chamada' | 'em_atendimento' | 'encerrado' | 'recusado';
   created_at: string;
+  updated_at: string;
 };
 
 export type QueueEntry = {
@@ -45,6 +50,7 @@ export type QueueEntry = {
   reentry_at: string | null;
   queue_type: QueueType;
   sorteio_session: string | null;
+  shift: Shift | null;
   created_at: string;
   updated_at: string;
   visit?: Visit;
@@ -56,4 +62,7 @@ export type PlantaoSession = {
   started_at: string;
   ended_at: string | null;
   status: 'active' | 'ended';
+  shift: Shift | null;
+  plantao_date: string | null;
+  last_called_agency: Agency | null;
 };

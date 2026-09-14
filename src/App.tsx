@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { Building2, DoorOpen, Tv, Users, ListOrdered, Zap, Clock, Plus, Shuffle, ClipboardList, RefreshCw, FileText, X, Trophy } from 'lucide-react';
-import { supabase, type Broker, type QueueEntry, type Visit } from '@/lib/supabase';
-import { fetchAll, interleaveQueue, executeSorteio, reiniciarPlantao, type SorteioResult } from '@/lib/queueEngine';
+import { Building2, DoorOpen, Tv, Users, ListOrdered, Zap, Clock, Plus, Shuffle, ClipboardList, RefreshCw, FileText, X, Trophy, Calendar, Sun, Moon, ArrowRight } from 'lucide-react';
+import { supabase, type Broker, type QueueEntry, type Visit, type PlantaoSession } from '@/lib/supabase';
+import { fetchAll, interleaveQueue, executeSorteio, reiniciarPlantao, transitionToAfternoon, type SorteioResult } from '@/lib/queueEngine';
 import { SimProvider, useSim } from '@/lib/simContext';
 
 import RecepcaoPanel from '@/components/RecepcaoPanel';
@@ -12,18 +12,21 @@ import FilaPanel from '@/components/FilaPanel';
 type View = 'recepcao' | 'chamadas' | 'corretor' | 'fila' | 'auditoria';
 
 function AppContent() {
-  const { clockDisplay, setStartTime, addMinute, testMode, setTestMode, sorteioTriggered, resetClock, simSeconds } = useSim();
+  const { clockDisplay, setStartTime, addMinute, jumpToAfternoon, testMode, setTestMode, sorteioTriggered, resetClock, simSeconds, currentShift, isWeekday, plantaoDate, setPlantaoDate, isPreSorteio, isCheckinOpen, isAtendimentoActive, isShiftTransition } = useSim();
   const [view, setView] = useState<View>('recepcao');
   const [brokers, setBrokers] = useState<Broker[]>([]);
   const [visits, setVisits] = useState<Visit[]>([]);
   const [queue, setQueue] = useState<QueueEntry[]>([]);
+  const [activeSession, setActiveSession] = useState<PlantaoSession | null>(null);
   const [loading, setLoading] = useState(true);
   const [sorteioResult, setSorteioResult] = useState<SorteioResult | null>(null);
   const [reiniciarDialog, setReiniciarDialog] = useState(false);
   const [attendanceReport, setAttendanceReport] = useState<QueueEntry[] | null>(null);
   const [reiniciando, setReiniciando] = useState(false);
+  const [transitioning, setTransitioning] = useState(false);
   const pollRef = useRef<number | undefined>(undefined);
   const sorteioExecutedRef = useRef(false);
+  const transitionExecutedRef = useRef(false);
 
   const load = useCallback(async () => {
     const data = await fetchAll();
@@ -31,6 +34,7 @@ function AppContent() {
     setBrokers(data.brokers);
     setVisits(data.visits);
     setQueue(data.queue);
+    setActiveSession(data.activeSession);
     setLoading(false);
   }, []);
 
@@ -53,18 +57,18 @@ function AppContent() {
     };
   }, [load]);
 
-  // Sorteio automático às 08:46:00
+  // Sorteio automático
   useEffect(() => {
     if (sorteioTriggered && !sorteioExecutedRef.current && brokers.length > 0) {
       sorteioExecutedRef.current = true;
-      executeSorteio(brokers, simSeconds).then((result) => {
+      executeSorteio(brokers, simSeconds, currentShift).then((result) => {
         if (result) {
           setSorteioResult(result);
           load();
         }
       });
     }
-  }, [sorteioTriggered, brokers, simSeconds, load]);
+  }, [sorteioTriggered, brokers, simSeconds, currentShift, load]);
 
   // Reset sorteio flag when clock is reset
   useEffect(() => {
@@ -73,11 +77,26 @@ function AppContent() {
     }
   }, [sorteioTriggered]);
 
-  const sortedQueue = interleaveQueue(queue, brokers);
+  // Auto-transition at 14:00h
+  useEffect(() => {
+    if (isShiftTransition && !transitionExecutedRef.current && brokers.length > 0) {
+      transitionExecutedRef.current = true;
+      setTransitioning(true);
+      transitionToAfternoon(brokers).then(() => {
+        setSorteioResult(null);
+        sorteioExecutedRef.current = false;
+        load().then(() => setTransitioning(false));
+      });
+    }
+    if (!isShiftTransition) {
+      transitionExecutedRef.current = false;
+    }
+  }, [isShiftTransition, brokers, load]);
+
+  const sortedQueue = interleaveQueue(queue, brokers, activeSession?.last_called_agency ?? null);
 
   async function handleReiniciar() {
     setReiniciando(true);
-    // Coletar dados do relatório ANTES de limpar
     const concluded = queue.filter((e) => e.queue_status === 'concluido' || e.queue_status === 'em_atendimento');
     setAttendanceReport(concluded);
 
@@ -85,6 +104,7 @@ function AppContent() {
     resetClock();
     setSorteioResult(null);
     sorteioExecutedRef.current = false;
+    transitionExecutedRef.current = false;
     await load();
     setReiniciando(false);
     setReiniciarDialog(false);
@@ -107,6 +127,9 @@ function AppContent() {
     );
   }
 
+  const shiftLabel = currentShift === 'manha' ? 'Manhã' : 'Tarde';
+  const shiftIcon = currentShift === 'manha' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />;
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
       <header className="bg-slate-900/80 backdrop-blur border-b border-slate-800 sticky top-0 z-50">
@@ -121,6 +144,28 @@ function AppContent() {
             </div>
 
             <div className="flex items-center gap-2 flex-wrap justify-end">
+              {/* Calendar / Date Picker */}
+              <div className="flex items-center gap-2 bg-slate-800 rounded-lg px-3 py-1.5">
+                <Calendar className="h-5 w-5 text-amber-400 shrink-0" />
+                <input
+                  type="date"
+                  value={plantaoDate}
+                  onChange={(e) => setPlantaoDate(e.target.value)}
+                  className="text-sm text-slate-300 bg-transparent focus:outline-none"
+                  title="Data do plantão"
+                />
+                <span className={`text-xs px-2 py-0.5 rounded-full ${isWeekday ? 'bg-emerald-500/15 text-emerald-400' : 'bg-orange-500/15 text-orange-400'}`}>
+                  {isWeekday ? 'Dia útil' : 'Fim de semana'}
+                </span>
+              </div>
+
+              {/* Shift badge */}
+              <div className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium ${currentShift === 'manha' ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' : 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20'}`}>
+                {shiftIcon}
+                {shiftLabel}
+              </div>
+
+              {/* Clock */}
               <div className="flex items-center gap-2 bg-slate-800 rounded-lg px-3 py-1.5">
                 <Clock className="h-5 w-5 text-amber-400 shrink-0" />
                 <div className="flex flex-col">
@@ -137,6 +182,14 @@ function AppContent() {
 
               <button onClick={addMinute} className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-2 rounded-lg text-sm font-medium transition" title="Avançar 1 minuto">
                 <Plus className="h-4 w-4" /> +1 min
+              </button>
+
+              <button
+                onClick={jumpToAfternoon}
+                className="flex items-center gap-1.5 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 px-3 py-2 rounded-lg text-sm font-medium transition border border-indigo-500/20"
+                title="Pular para a Tarde (13:40h)"
+              >
+                <ArrowRight className="h-4 w-4" /> Pular para a Tarde
               </button>
 
               <button
@@ -157,17 +210,32 @@ function AppContent() {
             </div>
           </div>
 
-          {sorteioTriggered && sorteioResult && (
-            <div className="flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-4 py-2 mb-2 text-sm text-emerald-400">
-              <Shuffle className="h-4 w-4 shrink-0" />
-              <span><strong className="text-emerald-300">Sorteio automático executado às 08:46:00</strong> — {sorteioResult.vivaBrokers.length} corretores Viva + {sorteioResult.nobreBrokers.length} Casa Nobre intercalados. <strong className="text-amber-300">Sorteio entre Empresas: {sorteioResult.desempateWinner} ganhou a preferência</strong> e inicia a intercalação. {sorteioResult.lateBrokers.length} atrasado(s) no fim da fila.</span>
+          {/* Status banners */}
+          {transitioning && (
+            <div className="flex items-center gap-2 bg-indigo-500/10 border border-indigo-500/20 rounded-lg px-4 py-2 mb-2 text-sm text-indigo-400">
+              <ArrowRight className="h-4 w-4 shrink-0 animate-pulse" />
+              <span><strong className="text-indigo-300">Transição de turno às 14:00h</strong> — Fila da manhã extinta. Corretores em atendimento continuam com vaga reservada na tarde.</span>
             </div>
           )}
 
-          {!sorteioTriggered && (
+          {sorteioTriggered && sorteioResult && !transitioning && (
+            <div className="flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-4 py-2 mb-2 text-sm text-emerald-400">
+              <Shuffle className="h-4 w-4 shrink-0" />
+              <span><strong className="text-emerald-300">Sorteio executado — Turno {sorteioResult.shift === 'manha' ? 'Manhã' : 'Tarde'}</strong> — {sorteioResult.vivaBrokers.length} corretores Viva + {sorteioResult.nobreBrokers.length} Casa Nobre intercalados. <strong className="text-amber-300">Desempate: {sorteioResult.desempateWinner} ganhou a preferência</strong>. {sorteioResult.lateBrokers.length} atrasado(s) no fim.</span>
+            </div>
+          )}
+
+          {!sorteioTriggered && isPreSorteio && (
+            <div className="flex items-center gap-2 bg-sky-500/10 border border-sky-500/20 rounded-lg px-4 py-2 mb-2 text-sm text-sky-400">
+              <Clock className="h-4 w-4 shrink-0" />
+              <span><strong className="text-sky-300">Período Pré-Sorteio</strong> — Atendimento por Ordem de Chegada. O primeiro corretor disponível que registrou presença atende. Sorteio automático às {currentShift === 'manha' ? '08:46:00' : '13:46:00'}.</span>
+            </div>
+          )}
+
+          {!sorteioTriggered && !isPreSorteio && !transitioning && (
             <div className="flex items-center gap-2 bg-slate-800/50 border border-slate-700/50 rounded-lg px-4 py-2 mb-2 text-sm text-slate-400">
               <Clock className="h-4 w-4 shrink-0 text-amber-400" />
-              <span>Sorteio automático às <strong className="text-amber-400">08:46:00</strong>. Marque os corretores como presentes antes deste horário.</span>
+              <span>Sorteio automático às <strong className="text-amber-400">{currentShift === 'manha' ? '08:46:00' : '13:46:00'}</strong>. {isCheckinOpen ? 'Check-in aberto — marque os corretores como presentes.' : 'Aguarde abertura do check-in.'}</span>
             </div>
           )}
 
@@ -269,10 +337,17 @@ function AuditoriaPanel({ sorteioResult, brokers, queue, attendanceReport }: {
           <div className="text-center py-12">
             <Clock className="h-12 w-12 text-slate-600 mx-auto mb-3" />
             <p className="text-slate-400">O sorteio ainda não foi executado.</p>
-            <p className="text-sm text-slate-500 mt-1">Aguarde o relógio chegar a 08:46:00 ou avance o tempo manualmente.</p>
+            <p className="text-sm text-slate-500 mt-1">Aguarde o relógio chegar ao horário do sorteio ou avance o tempo manualmente.</p>
           </div>
         ) : (
           <div className="space-y-6">
+            {/* Shift badge */}
+            <div className="flex items-center gap-2 mb-2">
+              <span className={`text-xs px-3 py-1 rounded-full font-medium ${sorteioResult.shift === 'manha' ? 'bg-amber-500/15 text-amber-400' : 'bg-indigo-500/15 text-indigo-400'}`}>
+                {sorteioResult.shift === 'manha' ? 'Turno Manhã' : 'Turno Tarde'}
+              </span>
+            </div>
+
             {/* Sorteio entre Empresas — banner em destaque */}
             <div className={`rounded-xl p-5 border-2 ${sorteioResult.desempateWinner === 'Viva Imóveis' ? 'bg-amber-500/10 border-amber-500/40' : 'bg-sky-500/10 border-sky-500/40'}`}>
               <div className="flex items-center gap-3">
@@ -397,6 +472,8 @@ function AuditoriaPanel({ sorteioResult, brokers, queue, attendanceReport }: {
               <span className="text-white text-sm font-medium flex-1">{b.operational_name}</span>
               <span className={`text-xs px-2 py-0.5 rounded-full ${b.agency === 'Viva Imóveis' ? 'bg-amber-500/15 text-amber-400' : 'bg-sky-500/15 text-sky-400'}`}>{b.agency}</span>
               {b.sorteio_order != null && <span className="text-xs text-slate-400">Posição: {b.sorteio_order}</span>}
+              {b.afternoon_reserved && <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-400">Vaga reservada</span>}
+              {b.shift && <span className={`text-xs px-2 py-0.5 rounded-full ${b.shift === 'manha' ? 'bg-amber-500/15 text-amber-400' : 'bg-indigo-500/15 text-indigo-400'}`}>{b.shift === 'manha' ? 'Manhã' : 'Tarde'}</span>}
               <span className={`text-xs px-2 py-0.5 rounded-full ${b.presence_status === 'presente' ? 'bg-emerald-500/15 text-emerald-400' : b.presence_status === 'pausa' ? 'bg-amber-500/15 text-amber-400' : 'bg-slate-600/30 text-slate-400'}`}>{b.presence_status}</span>
             </div>
           ))}
