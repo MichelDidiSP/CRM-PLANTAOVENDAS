@@ -143,6 +143,25 @@ function AppContent() {
               </div>
             </div>
 
+            {/* Relógio do simulador — destaque central */}
+            <div className="flex items-center gap-3 bg-amber-500/10 border-2 border-amber-500/40 rounded-xl px-5 py-1.5 shrink-0">
+              <Clock className="h-6 w-6 text-amber-400 shrink-0" />
+              <div className="flex flex-col items-center">
+                <span className="font-mono text-2xl font-bold text-amber-400 tabular-nums leading-none tracking-wide">{clockDisplay}</span>
+                <input
+                  type="time"
+                  step="1"
+                  onChange={(e) => e.target.value && setStartTime(e.target.value)}
+                  className="text-[10px] text-amber-200/60 bg-transparent focus:outline-none mt-0.5 w-[70px] text-center"
+                  title="Definir hora inicial"
+                />
+              </div>
+              <div className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium ${currentShift === 'manha' ? 'bg-amber-500/15 text-amber-300' : 'bg-indigo-500/15 text-indigo-300'}`}>
+                {shiftIcon}
+                {shiftLabel}
+              </div>
+            </div>
+
             <div className="flex items-center gap-2 flex-wrap justify-end">
               {/* Calendar / Date Picker */}
               <div className="flex items-center gap-2 bg-slate-800 rounded-lg px-3 py-1.5">
@@ -157,27 +176,6 @@ function AppContent() {
                 <span className={`text-xs px-2 py-0.5 rounded-full ${isWeekday ? 'bg-emerald-500/15 text-emerald-400' : 'bg-orange-500/15 text-orange-400'}`}>
                   {isWeekday ? 'Dia útil' : 'Fim de semana'}
                 </span>
-              </div>
-
-              {/* Shift badge */}
-              <div className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium ${currentShift === 'manha' ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' : 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20'}`}>
-                {shiftIcon}
-                {shiftLabel}
-              </div>
-
-              {/* Clock */}
-              <div className="flex items-center gap-2 bg-slate-800 rounded-lg px-3 py-1.5">
-                <Clock className="h-5 w-5 text-amber-400 shrink-0" />
-                <div className="flex flex-col">
-                  <span className="font-mono text-lg font-bold text-white tabular-nums leading-none">{clockDisplay}</span>
-                  <input
-                    type="time"
-                    step="1"
-                    onChange={(e) => e.target.value && setStartTime(e.target.value)}
-                    className="text-[10px] text-slate-500 bg-transparent focus:outline-none mt-0.5 w-[70px]"
-                    title="Definir hora inicial"
-                  />
-                </div>
               </div>
 
               <button onClick={addMinute} className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-2 rounded-lg text-sm font-medium transition" title="Avançar 1 minuto">
