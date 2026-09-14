@@ -6,7 +6,7 @@ const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 export type Agency = 'Viva Imóveis' | 'Casa Nobre' | 'Externo';
-export type VisitReason = 'Primeira visita' | 'Retorno' | 'Indicação' | 'Parceria' | 'Visita ao Decorado';
+export type VisitReason = 'Primeira visita' | 'Retorno' | 'Indicação' | 'Parceria' | 'Visita ao Decorado' | 'Indicação Presente' | 'Indicação Ausente' | 'Indicação Imobiliária';
 export type BrokerPresence = 'ausente' | 'presente' | 'pausa';
 export type AttendanceStatus = 'livre' | 'em_mesa' | 'decorado' | 'encerrado' | 'parceiro';
 export type QueueType = 'geral' | 'decorado' | 'parceria';

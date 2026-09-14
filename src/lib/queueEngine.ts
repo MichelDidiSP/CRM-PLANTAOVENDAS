@@ -34,7 +34,7 @@ export function sanitizePhone(input: string): string {
 }
 
 export const AGENCIES: Agency[] = ['Viva Imóveis', 'Casa Nobre'];
-export const REASONS: VisitReason[] = ['Primeira visita', 'Retorno', 'Indicação', 'Parceria', 'Visita ao Decorado'];
+export const REASONS: VisitReason[] = ['Primeira visita', 'Retorno', 'Indicação', 'Parceria', 'Visita ao Decorado', 'Indicação Presente', 'Indicação Ausente', 'Indicação Imobiliária'];
 export const QUEUE_TYPES: QueueType[] = ['geral', 'decorado', 'parceria'];
 
 function shuffleArray<T>(arr: T[]): T[] {
@@ -327,6 +327,19 @@ export function nextBrokerByArrival(brokers: Broker[], agency: Agency, excludeId
       const bTime = b.arrived_at ? new Date(b.arrived_at).getTime() : Infinity;
       return aTime - bTime;
     });
+
+  return agencyBrokers[0];
+}
+
+/**
+ * Indicação Module 3 — Rule 2 & 3: pick the LAST available broker from an agency
+ * (fim da fila atual). Used when the referred broker is absent, or when the
+ * client only knows the agency brand.
+ */
+export function lastBrokerFromAgency(brokers: Broker[], agency: Agency, excludeIds: Set<string>): Broker | undefined {
+  const agencyBrokers = brokers
+    .filter((b) => !b.is_external_partner && b.agency === agency && b.presence_status === 'presente' && b.attendance_status === 'livre' && !excludeIds.has(b.id))
+    .sort((a, b) => (b.sorteio_order ?? 0) - (a.sorteio_order ?? 0));
 
   return agencyBrokers[0];
 }

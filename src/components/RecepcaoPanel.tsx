@@ -1,8 +1,10 @@
 import { useState, useRef } from 'react';
-import { UserPlus, Phone, TriangleAlert as AlertTriangle, CircleCheck as CheckCircle2, Clock, Search, EyeOff, Eye, Zap } from 'lucide-react';
-import { supabase, type Broker, type Visit, type VisitReason, type Agency, type Shift } from '@/lib/supabase';
-import { REASONS, sanitizePhone, formatPhoneDisplay } from '@/lib/queueEngine';
+import { UserPlus, Phone, TriangleAlert as AlertTriangle, CircleCheck as CheckCircle2, Clock, Search, EyeOff, Eye, Zap, UserCheck, UserX, Building2 } from 'lucide-react';
+import { supabase, type Broker, type Visit, type VisitReason, type Agency } from '@/lib/supabase';
+import { REASONS, sanitizePhone, formatPhoneDisplay, lastBrokerFromAgency } from '@/lib/queueEngine';
 import { useSim } from '@/lib/simContext';
+
+type QuickReason = VisitReason | 'Indicação Presente' | 'Indicação Ausente' | 'Indicação Imobiliária';
 
 type Props = {
   brokers: Broker[];
@@ -20,10 +22,25 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
   const [searchPhone, setSearchPhone] = useState('');
   const [revealed, setRevealed] = useState(false);
   const { currentShift } = useSim();
-  const [quickReason, setQuickReason] = useState<VisitReason>('Primeira visita');
+  const [quickReason, setQuickReason] = useState<QuickReason>('Primeira visita');
   const [quickAgency, setQuickAgency] = useState<Agency>('Viva Imóveis');
+  const [quickBrokerId, setQuickBrokerId] = useState<string>('');
   const [quickSubmitting, setQuickSubmitting] = useState(false);
   const quickCounterRef = useRef(0);
+
+  const isIndicacaoPresente = quickReason === 'Indicação Presente';
+  const isIndicacaoAusente = quickReason === 'Indicação Ausente';
+  const isIndicacaoImobiliaria = quickReason === 'Indicação Imobiliária';
+  const isAnyIndicacao = isIndicacaoPresente || isIndicacaoAusente || isIndicacaoImobiliaria;
+  const needsBrokerSelect = isIndicacaoPresente || isIndicacaoAusente;
+  const needsAgencySelect = !isIndicacaoPresente && quickReason !== 'Parceria' && quickReason !== 'Visita ao Decorado';
+
+  const availableBrokersForQuick = brokers.filter(
+    (b) => !b.is_external_partner && b.agency === quickAgency && b.presence_status !== 'ausente',
+  );
+  const presentBrokersForQuick = brokers.filter(
+    (b) => !b.is_external_partner && b.agency === quickAgency && b.presence_status === 'presente',
+  );
 
   const normalizedPhone = sanitizePhone(phone);
   const duplicate = visits.find((v) => v.phone === normalizedPhone && v.status !== 'encerrado' && normalizedPhone.length > 0);
@@ -125,14 +142,29 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
     const isParceriaQuick = quickReason === 'Parceria';
     const isDecoradoQuick = quickReason === 'Visita ao Decorado';
     const queueType = isParceriaQuick ? 'parceria' : isDecoradoQuick ? 'decorado' : 'geral';
-    const entryAgency = isParceriaQuick ? 'Externo' : isDecoradoQuick ? 'Viva Imóveis' : quickAgency;
+    const entryAgency: Agency = isParceriaQuick ? 'Externo' : isDecoradoQuick ? 'Viva Imóveis' : quickAgency;
+
+    // Determine referred broker and visit reason for DB
+    let referredBrokerId: string | null = null;
+    let dbVisitReason: VisitReason = quickReason as VisitReason;
+
+    if (isIndicacaoPresente) {
+      referredBrokerId = quickBrokerId || null;
+      dbVisitReason = 'Indicação';
+    } else if (isIndicacaoAusente) {
+      referredBrokerId = quickBrokerId || null;
+      dbVisitReason = 'Indicação';
+    } else if (isIndicacaoImobiliaria) {
+      dbVisitReason = 'Indicação';
+    }
 
     const { data: visitData, error: visitError } = await supabase
       .from('visits')
       .insert({
         customer_name: fakeName,
         phone: fakePhone,
-        visit_reason: quickReason,
+        visit_reason: dbVisitReason,
+        referred_broker_id: referredBrokerId,
         status: 'aguardando',
       })
       .select()
@@ -143,14 +175,53 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
       return;
     }
 
-    await supabase.from('queue_entries').insert({
+    // Determine broker assignment for the queue entry
+    let assignedBrokerId: string | null = null;
+    let skipPositionConsumption = false;
+
+    if (isIndicacaoPresente) {
+      // Rule 1: goes directly to the referred broker, does NOT consume their vez
+      const referred = brokers.find((b) => b.id === quickBrokerId);
+      if (referred && referred.presence_status === 'presente' && referred.attendance_status === 'livre') {
+        assignedBrokerId = referred.id;
+        skipPositionConsumption = true;
+      }
+    } else if (isIndicacaoAusente) {
+      // Rule 2: referred broker is absent → last available broker of same agency
+      const referred = brokers.find((b) => b.id === quickBrokerId);
+      const targetAgency = referred?.agency ?? quickAgency;
+      const busyIds = new Set<string>();
+      const lastBroker = lastBrokerFromAgency(brokers, targetAgency, busyIds);
+      assignedBrokerId = lastBroker?.id ?? null;
+    } else if (isIndicacaoImobiliaria) {
+      // Rule 3: only knows agency → last available broker of that agency
+      const busyIds = new Set<string>();
+      const lastBroker = lastBrokerFromAgency(brokers, quickAgency, busyIds);
+      assignedBrokerId = lastBroker?.id ?? null;
+    }
+
+    const insertData: Record<string, unknown> = {
       visit_id: visitData.id,
       agency: entryAgency,
-      queue_status: 'aguardando',
-      attempts: 0,
+      queue_status: assignedBrokerId ? 'chamando' : 'aguardando',
+      attempts: assignedBrokerId ? 1 : 0,
       queue_type: queueType,
       shift: currentShift,
-    });
+      broker_id: assignedBrokerId,
+      called_at: assignedBrokerId ? new Date().toISOString() : null,
+    };
+
+    await supabase.from('queue_entries').insert(insertData);
+
+    if (assignedBrokerId) {
+      await supabase
+        .from('brokers')
+        .update({ attendance_status: 'em_mesa', last_status_update: new Date().toISOString() })
+        .eq('id', assignedBrokerId);
+      if (visitData.id) {
+        await supabase.from('visits').update({ status: 'aguardando_chamada' }).eq('id', visitData.id);
+      }
+    }
 
     setQuickSubmitting(false);
   }
@@ -170,25 +241,31 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
             </div>
           </div>
           <div className="flex flex-wrap items-end gap-3">
-            <div className="min-w-[160px]">
+            <div className="min-w-[200px]">
               <label className="block text-xs text-slate-400 mb-1">Motivo</label>
               <select
                 value={quickReason}
-                onChange={(e) => setQuickReason(e.target.value as VisitReason)}
+                onChange={(e) => {
+                  setQuickReason(e.target.value as QuickReason);
+                  setQuickBrokerId('');
+                }}
                 className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
               >
                 <option value="Primeira visita">Vez Geral</option>
                 <option value="Visita ao Decorado">Visita ao Decorado</option>
                 <option value="Parceria">Parceria</option>
-                <option value="Indicação">Indicação de Ausente</option>
+                <option value="Indicação Presente">Indicação: Sabe Corretor (Presente)</option>
+                <option value="Indicação Ausente">Indicação: Sabe Corretor (Ausente)</option>
+                <option value="Indicação Imobiliária">Indicação: Sabe Apenas a Imobiliária</option>
               </select>
             </div>
-            {quickReason !== 'Parceria' && quickReason !== 'Visita ao Decorado' && (
+
+            {needsAgencySelect && (
               <div className="min-w-[140px]">
                 <label className="block text-xs text-slate-400 mb-1">Imobiliária</label>
                 <select
                   value={quickAgency}
-                  onChange={(e) => setQuickAgency(e.target.value as Agency)}
+                  onChange={(e) => { setQuickAgency(e.target.value as Agency); setQuickBrokerId(''); }}
                   className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
                 >
                   <option value="Viva Imóveis">Viva Imóveis</option>
@@ -196,15 +273,61 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
                 </select>
               </div>
             )}
+
+            {needsBrokerSelect && (
+              <div className="min-w-[180px]">
+                <label className="block text-xs text-slate-400 mb-1">Corretor indicado</label>
+                <select
+                  value={quickBrokerId}
+                  onChange={(e) => setQuickBrokerId(e.target.value)}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                >
+                  <option value="">Selecione um corretor…</option>
+                  {(isIndicacaoAusente ? availableBrokersForQuick : presentBrokersForQuick).map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.operational_name} {b.presence_status === 'presente' ? '(Presente)' : '(Ausente)'}
+                    </option>
+                  ))}
+                </select>
+                {isIndicacaoAusente && availableBrokersForQuick.length === 0 && (
+                  <p className="text-xs text-slate-500 mt-1">Nenhum corretor cadastrado nesta imobiliária.</p>
+                )}
+              </div>
+            )}
+
             <button
               onClick={handleQuickEntry}
-              disabled={quickSubmitting}
+              disabled={quickSubmitting || (needsBrokerSelect && !quickBrokerId)}
               className="flex items-center gap-2 bg-amber-500 hover:bg-amber-400 disabled:bg-slate-700 text-slate-950 font-bold px-5 py-2.5 rounded-xl transition"
             >
               <Zap className="h-5 w-5" />
               {quickSubmitting ? 'Enviando…' : 'Simular Entrada Rápida'}
             </button>
           </div>
+
+          {/* Rule explanation badges */}
+          {isAnyIndicacao && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {isIndicacaoPresente && (
+                <span className="flex items-center gap-1.5 text-xs bg-emerald-500/10 text-emerald-400 px-3 py-1.5 rounded-lg">
+                  <UserCheck className="h-3.5 w-3.5" />
+                  Regra 1: Vai direto ao corretor. Não consome a vez na roleta.
+                </span>
+              )}
+              {isIndicacaoAusente && (
+                <span className="flex items-center gap-1.5 text-xs bg-orange-500/10 text-orange-400 px-3 py-1.5 rounded-lg">
+                  <UserX className="h-3.5 w-3.5" />
+                  Regra 2: Corretor ausente → último disponível da mesma imobiliária. Consome a vez.
+                </span>
+              )}
+              {isIndicacaoImobiliaria && (
+                <span className="flex items-center gap-1.5 text-xs bg-sky-500/10 text-sky-400 px-3 py-1.5 rounded-lg">
+                  <Building2 className="h-3.5 w-3.5" />
+                  Regra 3: Só a marca → último disponível da imobiliária. Consome a vez.
+                </span>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="bg-slate-900 rounded-2xl border border-slate-800 p-6">
