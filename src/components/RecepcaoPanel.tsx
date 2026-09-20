@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react';
 import { UserPlus, Phone, TriangleAlert as AlertTriangle, CircleCheck as CheckCircle2, Clock, Search, EyeOff, Eye, Zap, UserCheck, UserX, Building2, Trash2 } from 'lucide-react';
 import { supabase, type Broker, type Visit, type VisitReason, type Agency } from '@/lib/supabase';
-import { REASONS, QUICK_REASONS, sanitizePhone, formatPhoneDisplay, lastBrokerFromAgency, nextBrokerFromAgency, nextBrokerByArrival, nextBrokerFromInverseTop, nextBrokerByArrivalAnyAgency, nextBrokerByArrivalInverse, dispatchBroker, isArrivalOrderMode } from '@/lib/queueEngine';
+import { REASONS, QUICK_REASONS, sanitizePhone, formatPhoneDisplay, lastBrokerFromAgency, nextBrokerFromAgency, nextBrokerByArrival, nextBrokerFromInverseTop, nextBrokerByArrivalAnyAgency, nextBrokerByArrivalInverse, nextBrokerForGeneralQueue, dispatchBroker, isArrivalOrderMode } from '@/lib/queueEngine';
 import { useSim } from '@/lib/simContext';
 
 type QuickReason = VisitReason;
@@ -20,7 +20,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
   const [submitting, setSubmitting] = useState(false);
   const [searchPhone, setSearchPhone] = useState('');
   const [revealed, setRevealed] = useState(false);
-  const { currentShift, isPreSorteio, simSeconds } = useSim();
+  const { currentShift, isPreSorteio, simSeconds, getCurrentTime } = useSim();
 
   // Quick entry state
   const [quickReason, setQuickReason] = useState<QuickReason>('Primeira visita');
@@ -81,6 +81,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
 
     setSubmitting(true);
 
+    const simTimestamp = getCurrentTime().toISOString();
     const queueType = isParceria ? 'parceria' : isDecorado ? 'decorado' : 'geral';
 
     // Agency is hidden from reception — determined by system rules
@@ -95,6 +96,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
         visit_reason: reason,
         referred_broker_id: referredBrokerId || null,
         status: 'aguardando',
+        created_at: simTimestamp,
       })
       .select()
       .single();
@@ -112,6 +114,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
       attempts: 0,
       queue_type: queueType,
       shift: currentShift,
+      created_at: simTimestamp,
     });
 
     if (queueError) {
@@ -136,8 +139,9 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
     setQuickSubmitting(true);
     quickCounterRef.current += 1;
     const seq = quickCounterRef.current;
-    const fakeName = `Cliente Rápido #${seq}`;
+    const fakeName = `Cliente #${String(seq).padStart(2, '0')}`;
     const fakePhone = `119${Date.now()}${seq}`.slice(0, 13);
+    const simTimestamp = getCurrentTime().toISOString();
 
     const isParceriaQuick = quickReason === 'Parceria';
     const isDecoradoQuick = quickReason === 'Visita ao Decorado';
@@ -176,6 +180,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
         visit_reason: dbVisitReason,
         referred_broker_id: referredBrokerId,
         status: 'aguardando',
+        created_at: simTimestamp,
       })
       .select()
       .single();
@@ -216,17 +221,14 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
         assignedBrokerId = broker?.id ?? null;
       }
     } else if (!isParceriaQuick) {
-      // Geral: pre-sorteio uses pure arrival order across all agencies; post-sorteio uses intercalation
+      // Geral: pre-sorteio uses pure arrival order across all agencies;
+      // post-sorteio scans the intercalated queue top-to-bottom for first 'Livre' broker
       if (isArrivalOrderMode(simSeconds)) {
         const broker = nextBrokerByArrivalAnyAgency(brokers, busyIds);
         assignedBrokerId = broker?.id ?? null;
       } else {
-        const broker = nextBrokerFromAgency(brokers, 'Viva Imóveis', busyIds);
+        const { broker } = nextBrokerForGeneralQueue(brokers, null, busyIds);
         assignedBrokerId = broker?.id ?? null;
-        if (!assignedBrokerId) {
-          const broker2 = nextBrokerFromAgency(brokers, 'Casa Nobre', busyIds);
-          assignedBrokerId = broker2?.id ?? null;
-        }
       }
     }
 
@@ -238,7 +240,8 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
       queue_type: queueType,
       shift: currentShift,
       broker_id: assignedBrokerId,
-      called_at: assignedBrokerId ? new Date().toISOString() : null,
+      called_at: assignedBrokerId ? simTimestamp : null,
+      created_at: simTimestamp,
     };
 
     await supabase.from('queue_entries').insert(insertData);
@@ -246,7 +249,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
     if (assignedBrokerId) {
       await supabase
         .from('brokers')
-        .update({ attendance_status: 'em_mesa', last_status_update: new Date().toISOString() })
+        .update({ attendance_status: 'em_mesa', last_status_update: simTimestamp })
         .eq('id', assignedBrokerId);
       await supabase.from('visits').update({ status: 'aguardando_chamada' }).eq('id', visitData.id);
     }

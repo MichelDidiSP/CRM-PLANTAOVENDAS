@@ -396,46 +396,6 @@ function AuditoriaPanel({ sorteioResult, brokers, queue, attendanceReport }: {
                 </div>
               </div>
             </div>
-
-            {/* Fila Geral + Fila Inversa side by side */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* Fila Geral Direta */}
-              <div className="bg-slate-800/30 border border-slate-700/50 rounded-xl p-4">
-                <h3 className="font-bold text-slate-200 mb-3 flex items-center gap-2"><ListOrdered className="h-4 w-4" /> Fila Geral Direta (intercalada)</h3>
-                <div className="space-y-1.5">
-                  {sorteioResult.interleavedBrokers.map((b, i) => {
-                    const isLate = sorteioResult.lateBrokers.includes(b);
-                    return (
-                      <div key={b.id} className="flex items-center gap-3 bg-slate-900/60 rounded-lg p-2.5">
-                        <span className="font-mono text-sm text-slate-500 w-8 text-center">{i + 1}.</span>
-                        <span className="text-white text-sm font-medium flex-1">{b.operational_name}</span>
-                        <span className={`text-xs px-2 py-0.5 rounded-full ${b.agency === 'Viva Imóveis' ? 'bg-amber-500/15 text-amber-400' : 'bg-sky-500/15 text-sky-400'}`}>{b.agency}</span>
-                        {isLate && <span className="text-xs px-2 py-0.5 rounded-full bg-red-500/15 text-red-400">Atrasado</span>}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Fila Inversa Geral (Visita ao Decorado) */}
-              <div className="bg-orange-500/5 border border-orange-500/20 rounded-xl p-4">
-                <h3 className="font-bold text-orange-400 mb-3 flex items-center gap-2"><Home className="h-4 w-4" /> Fila Inversa Geral (Visita ao Decorado)</h3>
-                <div className="space-y-1.5">
-                  {[...sorteioResult.interleavedBrokers].reverse().map((b, i) => {
-                    const isLate = sorteioResult.lateBrokers.includes(b);
-                    return (
-                      <div key={b.id} className="flex items-center gap-3 bg-slate-900/60 rounded-lg p-2.5">
-                        <span className="font-mono text-sm text-orange-400/60 w-8 text-center">{i + 1}.</span>
-                        <span className="text-white text-sm font-medium flex-1">{b.operational_name}</span>
-                        <span className={`text-xs px-2 py-0.5 rounded-full ${b.agency === 'Viva Imóveis' ? 'bg-amber-500/15 text-amber-400' : 'bg-sky-500/15 text-sky-400'}`}>{b.agency}</span>
-                        {isLate && <span className="text-xs px-2 py-0.5 rounded-full bg-red-500/15 text-red-400">Atrasado</span>}
-                      </div>
-                    );
-                  })}
-                  {sorteioResult.interleavedBrokers.length === 0 && <p className="text-sm text-slate-500">Fila inversa vazia.</p>}
-                </div>
-              </div>
-            </div>
           </div>
         )}
       </div>

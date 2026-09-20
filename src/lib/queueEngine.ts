@@ -315,13 +315,8 @@ function sortKey(entries: QueueEntry[], brokers: Broker[], entry: QueueEntry): n
 }
 
 /**
- * Infinite Intercalation: picks the next broker based on alternation.
- * Uses sorteio_order as a circular list — when all brokers have served,
- * cycles back to the beginning (reentry).
- *
- * @param brokers - all brokers
- * @param agency - which agency's turn it is
- * @param excludeIds - broker IDs currently busy
+ * Returns the first 'Livre' broker from a given agency, sorted by sorteio_order ascending.
+ * Brokers with status 'Chamado', 'Em Atendimento', or 'Pausado' are skipped.
  */
 export function nextBrokerFromAgency(brokers: Broker[], agency: Agency, excludeIds: Set<string>): Broker | undefined {
   const agencyBrokers = brokers
@@ -332,24 +327,25 @@ export function nextBrokerFromAgency(brokers: Broker[], agency: Agency, excludeI
 }
 
 /**
- * Picks the next broker for the general queue, respecting infinite intercalation.
- * Alternates agencies. If the current agency has no available broker, falls back
- * to the other agency (but logs the break in alternation).
+ * Picks the next broker for the general queue by scanning the FULL intercalated
+ * queue top-to-bottom (sorted by sorteio_order ascending) and returning the
+ * FIRST broker whose status is strictly 'Livre'.
+ *
+ * The sorteio_order already encodes the intercalation (1=Viva, 2=Nobre, 3=Viva...),
+ * so scanning top-to-bottom naturally respects alternation. Brokers with status
+ * 'Chamado', 'Em Atendimento', or 'Pausado' are skipped.
  */
 export function nextBrokerForGeneralQueue(
   brokers: Broker[],
-  lastCalledAgency: Agency | null,
+  _lastCalledAgency: Agency | null,
   excludeIds: Set<string>,
 ): { broker: Broker | undefined; agency: Agency } {
-  const nextAgency: Agency = lastCalledAgency === 'Viva Imóveis' ? 'Casa Nobre' : 'Viva Imóveis';
+  const available = brokers
+    .filter((b) => !b.is_external_partner && b.presence_status === 'presente' && b.attendance_status === 'livre' && !excludeIds.has(b.id))
+    .sort((a, b) => (a.sorteio_order ?? 999) - (b.sorteio_order ?? 999));
 
-  let broker = nextBrokerFromAgency(brokers, nextAgency, excludeIds);
-  if (broker) return { broker, agency: nextAgency };
-
-  // Fallback: try the other agency
-  const fallbackAgency: Agency = nextAgency === 'Viva Imóveis' ? 'Casa Nobre' : 'Viva Imóveis';
-  broker = nextBrokerFromAgency(brokers, fallbackAgency, excludeIds);
-  return { broker, agency: fallbackAgency };
+  const broker = available[0];
+  return { broker, agency: broker?.agency ?? 'Viva Imóveis' };
 }
 
 /**

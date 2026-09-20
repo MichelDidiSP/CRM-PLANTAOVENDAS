@@ -192,16 +192,16 @@ describe('Pre-Sorteio Arrival Order (Rule 1 — before 08:46h)', () => {
 });
 
 describe('Pós-Sorteio Intercalation (Rule 3)', () => {
-  it('Vez Geral: alternates agencies starting with the non-last-called', () => {
-    // Last called = Viva → next should be Nobre
+  it('Vez Geral: scans top-to-bottom for first Livre broker (sorteio_order already encodes intercalation)', () => {
+    // sorteio_order: v1=1, n1=2, v2=3, n2=4, v3=5, n3=6, v4=7, n4=8, v5=9, n5=10
+    // First available = v1 (sorteio_order 1)
     const result = dispatchBroker(allBrokers, 'geral', SORTEIO_MANHA, new Set(), 'Viva Imóveis', null);
-    expect(result.broker?.agency).toBe('Casa Nobre');
-    expect(result.broker?.id).toBe('n1'); // sorteio_order 2
+    expect(result.broker?.id).toBe('v1');
+    expect(result.broker?.agency).toBe('Viva Imóveis');
 
-    // Last called = Nobre → next should be Viva
+    // lastCalledAgency is now ignored — scan is always top-to-bottom
     const result2 = dispatchBroker(allBrokers, 'geral', SORTEIO_MANHA, new Set(), 'Casa Nobre', null);
-    expect(result2.broker?.agency).toBe('Viva Imóveis');
-    expect(result2.broker?.id).toBe('v1'); // sorteio_order 1
+    expect(result2.broker?.id).toBe('v1');
   });
 
   it('Decorado: uses inverse sorteio (last broker of general queue)', () => {
@@ -210,10 +210,10 @@ describe('Pós-Sorteio Intercalation (Rule 3)', () => {
     expect(result.broker?.id).toBe('n5');
   });
 
-  it('Excludes busy brokers — next available is picked', () => {
-    const busy = new Set(['n1', 'v1']);
+  it('Excludes busy brokers — next available Livre is picked', () => {
+    const busy = new Set(['v1', 'n1']);
     const result = dispatchBroker(allBrokers, 'geral', SORTEIO_MANHA, busy, 'Casa Nobre', null);
-    // Last called Nobre → next Viva, v1 busy → v2 (sorteio_order 3)
+    // v1(1) and n1(2) busy → next is v2 (sorteio_order 3)
     expect(result.broker?.agency).toBe('Viva Imóveis');
     expect(result.broker?.id).toBe('v2');
   });
@@ -282,6 +282,7 @@ describe('Dynamic Queue Advancement (Rule 4)', () => {
     const r2 = dispatchBroker(allBrokers, 'geral', SORTEIO_MANHA, exclude, r1.agency, null);
     expect(r2.broker).toBeDefined();
     expect(r2.broker?.id).not.toBe(r1.broker?.id);
+    exclude.add(r2.broker!.id);
 
     // Client 3 → next available
     const r3 = dispatchBroker(allBrokers, 'geral', SORTEIO_MANHA, exclude, r2.agency, null);
@@ -299,9 +300,9 @@ describe('Dynamic Queue Advancement (Rule 4)', () => {
     expect(decoradoTop.broker?.id).toBe('n5');
   });
 
-  it('3 strikes: after 3 failed calls, broker is excluded and next from same queue is called', () => {
+  it('3 strikes: after 3 failed calls, broker is excluded and next Livre is called', () => {
     const busy = new Set<string>(['v1']); // v1 was called 3 times and is now paused
-    // Last called = Viva → next agency = Nobre → n1 is available
+    // v1(1) excluded → next Livre is n1 (sorteio_order 2)
     const result = dispatchBroker(allBrokers, 'geral', SORTEIO_MANHA, busy, 'Viva Imóveis', null);
     expect(result.broker?.id).toBe('n1');
     expect(result.broker?.agency).toBe('Casa Nobre');
