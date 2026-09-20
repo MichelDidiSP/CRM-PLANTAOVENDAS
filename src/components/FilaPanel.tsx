@@ -1,6 +1,6 @@
 import { Bell, CircleCheck as CheckCircle2, Eye, ArrowLeftRight, Clock, TriangleAlert as AlertTriangle, UserCheck, History, Chrome as Home, Repeat, Sun, Moon } from 'lucide-react';
 import { supabase, type Broker, type QueueEntry, type Agency } from '@/lib/supabase';
-import { isLateForSort, interleaveQueue, reverseInterleaveQueue, nextBrokerFromInverseQueue, nextBrokerForGeneralQueue, nextBrokerByArrival, nextBrokerFromInverseTop, moveBrokerToEndOfQueue } from '@/lib/queueEngine';
+import { isLateForSort, interleaveQueue, reverseInterleaveQueue, nextBrokerFromInverseQueue, nextBrokerForGeneralQueue, nextBrokerByArrival, nextBrokerFromInverseTop, moveBrokerToEndOfQueue, dispatchBroker, isArrivalOrderMode, nextBrokerByArrivalAnyAgency, nextBrokerByArrivalInverse, resolveIndicacaoBroker } from '@/lib/queueEngine';
 import { useSim } from '@/lib/simContext';
 
 type Props = {
@@ -10,7 +10,7 @@ type Props = {
 };
 
 export default function FilaPanel({ queue, brokers, allQueue }: Props) {
-  const { isPreSorteio, currentShift } = useSim();
+  const { isPreSorteio, currentShift, simSeconds } = useSim();
   const waiting = queue.filter((e) => e.queue_status === 'aguardando');
   const calling = allQueue.filter((e) => e.queue_status === 'chamando');
   const inAttendance = allQueue.filter((e) => e.queue_status === 'em_atendimento');
@@ -49,34 +49,17 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
   }
 
   /**
-   * Infinite Intercalation call: alternates agencies.
-   * Pre-sorteio: uses arrival order instead of sorteio_order.
+   * Unified dispatch using the temporal divisor.
+   * Pre-sorteio: arrival order (Vez Geral) / inverse arrival (Decorado).
+   * Pós-sorteio: intercalation (Vez Geral) / inverse sorteio (Decorado).
+   * Indicação: hierarchical transbordo (named → same agency → other agency → last of agency).
    */
   async function callNext(entry: QueueEntry) {
     const referredBrokerId = entry.visit?.referred_broker_id ?? null;
-
-    if (isPreSorteio) {
-      // Pre-sorteio: first available broker by arrival order from the same agency
-      const broker = nextBrokerByArrival(brokers, entry.agency, busyBrokerIds);
-      await updateEntryToCalling(entry, broker?.id ?? null);
-      return;
-    }
-
-    if (referredBrokerId) {
-      const referredBroker = brokers.find((b) => b.id === referredBrokerId);
-      if (referredBroker && referredBroker.presence_status === 'presente' && referredBroker.attendance_status === 'livre' && !busyBrokerIds.has(referredBroker.id)) {
-        await updateEntryToCalling(entry, referredBrokerId);
-        return;
-      }
-    }
-
-    // Infinite intercalation: pick next broker respecting alternation
     const lastCalledAgency = await getLastCalledAgency();
-    const { broker } = nextBrokerForGeneralQueue(brokers, lastCalledAgency, busyBrokerIds);
+    const { broker } = dispatchBroker(brokers, entry.queue_type, simSeconds, busyBrokerIds, lastCalledAgency, referredBrokerId);
     await updateEntryToCalling(entry, broker?.id ?? null);
-
-    // Update last_called_agency in session
-    if (broker) {
+    if (broker && entry.queue_type === 'geral') {
       await updateLastCalledAgency(broker.agency);
     }
   }
@@ -100,8 +83,13 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
   }
 
   async function callDecorado(entry: QueueEntry) {
-    const broker = nextBrokerFromInverseTop(brokers, busyBrokerIds);
-    await updateEntryToCalling(entry, broker?.id ?? null);
+    if (isArrivalOrderMode(simSeconds)) {
+      const broker = nextBrokerByArrivalInverse(brokers, busyBrokerIds);
+      await updateEntryToCalling(entry, broker?.id ?? null);
+    } else {
+      const broker = nextBrokerFromInverseTop(brokers, busyBrokerIds);
+      await updateEntryToCalling(entry, broker?.id ?? null);
+    }
   }
 
   async function callParceria(entry: QueueEntry) {
@@ -117,9 +105,16 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
 
   async function markAbsent(entry: QueueEntry) {
     if (entry.broker_id) {
-      await supabase.from('brokers').update({ presence_status: 'pausa', attendance_status: 'livre', last_status_update: new Date().toISOString() }).eq('id', entry.broker_id);
+      // 3 strikes → broker is paused (not just pausa), next broker from same queue
+      const isLastAttempt = entry.attempts >= 3;
+      if (isLastAttempt) {
+        await supabase.from('brokers').update({ presence_status: 'pausa', attendance_status: 'livre', last_status_update: new Date().toISOString() }).eq('id', entry.broker_id);
+      } else {
+        await supabase.from('brokers').update({ attendance_status: 'livre', last_status_update: new Date().toISOString() }).eq('id', entry.broker_id);
+      }
     }
     const wasLastAttempt = entry.attempts >= 3;
+    // Client stays at top of their queue; reset attempts only if last (new broker gets fresh 3)
     await supabase
       .from('queue_entries')
       .update({ queue_status: 'aguardando', broker_id: null, attempts: wasLastAttempt ? 0 : entry.attempts, updated_at: new Date().toISOString() })
@@ -127,6 +122,7 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
     if (entry.visit_id) {
       await supabase.from('visits').update({ status: 'aguardando' }).eq('id', entry.visit_id);
     }
+    // Auto-recall: next broker from the SAME queue type (direta or inversa)
     setTimeout(() => autoRecall(entry, wasLastAttempt), 500);
   }
 
@@ -149,9 +145,9 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
     }
     if (entry.broker_id) {
       await supabase.from('brokers').update({ attendance_status: 'livre', last_status_update: new Date().toISOString() }).eq('id', entry.broker_id);
-      // Rule 3: Vez Geral — move broker to END of queue (consumes their vez, fila walks forward)
-      // Rule 5: Indicação Presente — broker KEEPS their position, do NOT move to end
-      if (!wasIndicacaoPresente && entry.queue_type === 'geral') {
+      // Dynamic Return Rule: broker goes to last position of the queue they served in
+      // Indicação Presente is the only exception — broker keeps their position
+      if (!wasIndicacaoPresente) {
         await moveBrokerToEndOfQueue(entry.broker_id, brokers);
       }
     }

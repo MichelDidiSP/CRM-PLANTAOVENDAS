@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react';
-import { UserPlus, Phone, TriangleAlert as AlertTriangle, CircleCheck as CheckCircle2, Clock, Search, EyeOff, Eye, Zap, UserCheck, UserX, Building2 } from 'lucide-react';
+import { UserPlus, Phone, TriangleAlert as AlertTriangle, CircleCheck as CheckCircle2, Clock, Search, EyeOff, Eye, Zap, UserCheck, UserX, Building2, Trash2 } from 'lucide-react';
 import { supabase, type Broker, type Visit, type VisitReason, type Agency } from '@/lib/supabase';
-import { REASONS, QUICK_REASONS, sanitizePhone, formatPhoneDisplay, lastBrokerFromAgency, nextBrokerFromAgency, nextBrokerByArrival, nextBrokerFromInverseTop } from '@/lib/queueEngine';
+import { REASONS, QUICK_REASONS, sanitizePhone, formatPhoneDisplay, lastBrokerFromAgency, nextBrokerFromAgency, nextBrokerByArrival, nextBrokerFromInverseTop, nextBrokerByArrivalAnyAgency, nextBrokerByArrivalInverse, dispatchBroker, isArrivalOrderMode } from '@/lib/queueEngine';
 import { useSim } from '@/lib/simContext';
 
 type QuickReason = VisitReason;
@@ -20,13 +20,15 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
   const [submitting, setSubmitting] = useState(false);
   const [searchPhone, setSearchPhone] = useState('');
   const [revealed, setRevealed] = useState(false);
-  const { currentShift, isPreSorteio } = useSim();
+  const { currentShift, isPreSorteio, simSeconds } = useSim();
 
   // Quick entry state
   const [quickReason, setQuickReason] = useState<QuickReason>('Primeira visita');
   const [quickBrokerId, setQuickBrokerId] = useState<string>('');
   const [quickSubmitting, setQuickSubmitting] = useState(false);
   const quickCounterRef = useRef(0);
+  const [discardCount, setDiscardCount] = useState(5);
+  const [discarding, setDiscarding] = useState(false);
 
   const isIndicacaoPresente = quickReason === 'Indicação Presente';
   const isIndicacaoAusente = quickReason === 'Indicação Ausente';
@@ -135,7 +137,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
     quickCounterRef.current += 1;
     const seq = quickCounterRef.current;
     const fakeName = `Cliente Rápido #${seq}`;
-    const fakePhone = `119${String(90000000 + seq).padStart(8, '0')}`;
+    const fakePhone = `119${Date.now()}${seq}`.slice(0, 13);
 
     const isParceriaQuick = quickReason === 'Parceria';
     const isDecoradoQuick = quickReason === 'Visita ao Decorado';
@@ -205,18 +207,19 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
       const lastBroker = lastBrokerFromAgency(brokers, 'Viva Imóveis', busyIds);
       assignedBrokerId = lastBroker?.id ?? null;
     } else if (isDecoradoQuick) {
-      // Decorado: pick from top of inverse queue
-      const broker = nextBrokerFromInverseTop(brokers, busyIds);
-      assignedBrokerId = broker?.id ?? null;
-    } else if (!isParceriaQuick) {
-      // Geral: if pre-sorteio, use arrival order; else use sorteio intercalation
-      if (isPreSorteio) {
-        const broker = nextBrokerByArrival(brokers, 'Viva Imóveis', busyIds);
+      // Decorado: pre-sorteio uses inverse arrival order; post-sorteio uses inverse sorteio
+      if (isArrivalOrderMode(simSeconds)) {
+        const broker = nextBrokerByArrivalInverse(brokers, busyIds);
         assignedBrokerId = broker?.id ?? null;
-        if (!assignedBrokerId) {
-          const broker2 = nextBrokerByArrival(brokers, 'Casa Nobre', busyIds);
-          assignedBrokerId = broker2?.id ?? null;
-        }
+      } else {
+        const broker = nextBrokerFromInverseTop(brokers, busyIds);
+        assignedBrokerId = broker?.id ?? null;
+      }
+    } else if (!isParceriaQuick) {
+      // Geral: pre-sorteio uses pure arrival order across all agencies; post-sorteio uses intercalation
+      if (isArrivalOrderMode(simSeconds)) {
+        const broker = nextBrokerByArrivalAnyAgency(brokers, busyIds);
+        assignedBrokerId = broker?.id ?? null;
       } else {
         const broker = nextBrokerFromAgency(brokers, 'Viva Imóveis', busyIds);
         assignedBrokerId = broker?.id ?? null;
@@ -249,6 +252,18 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
     }
 
     setQuickSubmitting(false);
+  }
+
+  async function handleDiscardClients() {
+    if (discardCount < 1) return;
+    setDiscarding(true);
+    const recentVisits = [...visits].reverse().slice(0, discardCount);
+    const visitIds = recentVisits.map((v) => v.id);
+    if (visitIds.length > 0) {
+      await supabase.from('queue_entries').delete().in('visit_id', visitIds);
+      await supabase.from('visits').delete().in('id', visitIds);
+    }
+    setDiscarding(false);
   }
 
   return (
@@ -344,6 +359,32 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
               )}
             </div>
           )}
+
+          {/* Descarte Controlado de Clientes */}
+          <div className="mt-4 flex flex-wrap items-end gap-3 pt-4 border-t border-amber-500/20">
+            <div className="min-w-[100px]">
+              <label className="block text-xs text-slate-400 mb-1">Quantidade</label>
+              <input
+                type="number"
+                min={1}
+                max={100}
+                value={discardCount}
+                onChange={(e) => setDiscardCount(Math.max(1, Math.min(100, parseInt(e.target.value) || 1)))}
+                className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-red-500"
+              />
+            </div>
+            <button
+              onClick={handleDiscardClients}
+              disabled={discarding || visits.length === 0}
+              className="flex items-center gap-2 bg-red-500/10 hover:bg-red-500/20 disabled:bg-slate-700 text-red-400 disabled:text-slate-500 font-medium px-4 py-2.5 rounded-xl transition border border-red-500/20 disabled:border-slate-700"
+            >
+              <Trash2 className="h-4 w-4" />
+              {discarding ? 'Descartando…' : `Descartar Últimos ${discardCount} Clientes`}
+            </button>
+            <p className="text-xs text-slate-500 self-center">
+              Apaga apenas os últimos clientes inseridos. Mantém o restante para testes de anti-duplicidade e Retorno.
+            </p>
+          </div>
         </div>
 
         <div className="bg-slate-900 rounded-2xl border border-slate-800 p-6">

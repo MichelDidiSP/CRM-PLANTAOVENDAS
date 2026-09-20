@@ -39,6 +39,40 @@ export const REASONS: VisitReason[] = ['Primeira visita', 'Retorno', 'Indicaçã
 export const QUICK_REASONS: VisitReason[] = ['Primeira visita', 'Retorno', 'Indicação', 'Parceria', 'Visita ao Decorado', 'Indicação Presente', 'Indicação Ausente', 'Indicação Imobiliária'];
 export const QUEUE_TYPES: QueueType[] = ['geral', 'decorado', 'parceria'];
 
+/**
+ * Temporal Divisor: determines which dispatch mode the system is in.
+ * - 'arrival': pre-sorteio morning (before 08:46h) — pure arrival-order queue
+ * - 'sorteio_manha': morning sorteio active (08:46h to 13:59h) — intercalated roleta
+ * - 'pre_tarde': 13:00h to 13:59h — morning sorteio still governs, afternoon check-in opens
+ * - 'sorteio_tarde': 14:00h+ — afternoon sorteio active
+ */
+export type DispatchMode = 'arrival' | 'sorteio_manha' | 'pre_tarde' | 'sorteio_tarde';
+
+export function getDispatchMode(simSeconds: number): DispatchMode {
+  if (simSeconds < SORTEIO_MANHA) return 'arrival';
+  if (simSeconds >= SORTEIO_MANHA && simSeconds < TARDE_CHECKIN_OPEN_SECONDS) return 'sorteio_manha';
+  if (simSeconds >= TARDE_CHECKIN_OPEN_SECONDS && simSeconds < TARDE_ATEND_START_SECONDS) return 'pre_tarde';
+  return 'sorteio_tarde';
+}
+
+const TARDE_CHECKIN_OPEN_SECONDS = 13 * 3600;       // 13:00:00
+const TARDE_ATEND_START_SECONDS = 14 * 3600;          // 14:00:00
+
+/**
+ * Is the system in pre-sorteio mode (arrival order, no roleta)?
+ */
+export function isArrivalOrderMode(simSeconds: number): boolean {
+  return getDispatchMode(simSeconds) === 'arrival';
+}
+
+/**
+ * Is the morning sorteio still governing the plantao (08:46h to 13:59h)?
+ */
+export function isManhaSorteioActive(simSeconds: number): boolean {
+  const mode = getDispatchMode(simSeconds);
+  return mode === 'sorteio_manha' || mode === 'pre_tarde';
+}
+
 function shuffleArray<T>(arr: T[]): T[] {
   const result = [...arr];
   for (let i = result.length - 1; i > 0; i--) {
@@ -320,6 +354,7 @@ export function nextBrokerForGeneralQueue(
 
 /**
  * Pre-sorteio: picks the first available broker by arrival order (not sorteio).
+ * Used for Vez Geral before 08:46h.
  */
 export function nextBrokerByArrival(brokers: Broker[], agency: Agency, excludeIds: Set<string>): Broker | undefined {
   const agencyBrokers = brokers
@@ -334,6 +369,38 @@ export function nextBrokerByArrival(brokers: Broker[], agency: Agency, excludeId
 }
 
 /**
+ * Pre-sorteio: picks the first available broker by arrival order across ALL agencies.
+ * 1st client calls 1st broker who arrived, 2nd calls 2nd, etc.
+ */
+export function nextBrokerByArrivalAnyAgency(brokers: Broker[], excludeIds: Set<string>): Broker | undefined {
+  const available = brokers
+    .filter((b) => !b.is_external_partner && b.presence_status === 'presente' && b.attendance_status === 'livre' && !excludeIds.has(b.id))
+    .sort((a, b) => {
+      const aTime = a.arrived_at ? new Date(a.arrived_at).getTime() : Infinity;
+      const bTime = b.arrived_at ? new Date(b.arrived_at).getTime() : Infinity;
+      return aTime - bTime;
+    });
+
+  return available[0];
+}
+
+/**
+ * Pre-sorteio inverse: picks the LAST available broker by arrival order.
+ * Used for Visita ao Decorado before 08:46h (inverse queue = last to arrive).
+ */
+export function nextBrokerByArrivalInverse(brokers: Broker[], excludeIds: Set<string>): Broker | undefined {
+  const available = brokers
+    .filter((b) => !b.is_external_partner && b.presence_status === 'presente' && b.attendance_status === 'livre' && !excludeIds.has(b.id))
+    .sort((a, b) => {
+      const aTime = a.arrived_at ? new Date(a.arrived_at).getTime() : -Infinity;
+      const bTime = b.arrived_at ? new Date(b.arrived_at).getTime() : -Infinity;
+      return bTime - aTime;
+    });
+
+  return available[0];
+}
+
+/**
  * Indicação Module 3 — Rule 2 & 3: pick the LAST available broker from an agency
  * (fim da fila atual). Used when the referred broker is absent, or when the
  * client only knows the agency brand.
@@ -344,6 +411,106 @@ export function lastBrokerFromAgency(brokers: Broker[], agency: Agency, excludeI
     .sort((a, b) => (b.sorteio_order ?? 0) - (a.sorteio_order ?? 0));
 
   return agencyBrokers[0];
+}
+
+/**
+ * Hierarchical Transbordo for Indicação (Rule 2):
+ * 1. Try the named broker if present and free.
+ * 2. If absent, try someone from the SAME AGENCY who is present and free.
+ *    (same agency = same team/gerente)
+ * 3. If no one from same agency is available, try the OTHER agency
+ *    (same diretoria = both agencies belong to the same corporate entity).
+ * 4. Only after exhausting all corporate instances, fall back to the LAST
+ *    available broker of the referred broker's agency (consome a vez normal).
+ *
+ * Returns the broker and whether the vez is consumed.
+ */
+export function resolveIndicacaoBroker(
+  brokers: Broker[],
+  referredBrokerId: string | null,
+  excludeIds: Set<string>,
+): { broker: Broker | undefined; consumesVez: boolean; source: 'named' | 'same_agency' | 'other_agency' | 'last_of_agency' } {
+  if (!referredBrokerId) {
+    return { broker: undefined, consumesVez: true, source: 'last_of_agency' };
+  }
+
+  const referred = brokers.find((b) => b.id === referredBrokerId);
+  if (!referred) {
+    return { broker: undefined, consumesVez: true, source: 'last_of_agency' };
+  }
+
+  // Step 1: Named broker is present and free
+  if (referred.presence_status === 'presente' && referred.attendance_status === 'livre' && !excludeIds.has(referred.id)) {
+    return { broker: referred, consumesVez: false, source: 'named' };
+  }
+
+  // Step 2: Same agency (same team/gerente) — first available
+  const sameAgency = nextBrokerFromAgency(brokers, referred.agency, excludeIds);
+  if (sameAgency) {
+    return { broker: sameAgency, consumesVez: true, source: 'same_agency' };
+  }
+
+  // Step 3: Other agency (same diretoria)
+  const otherAgency: Agency = referred.agency === 'Viva Imóveis' ? 'Casa Nobre' : 'Viva Imóveis';
+  const otherAgencyBroker = nextBrokerFromAgency(brokers, otherAgency, excludeIds);
+  if (otherAgencyBroker) {
+    return { broker: otherAgencyBroker, consumesVez: true, source: 'other_agency' };
+  }
+
+  // Step 4: Last available broker of referred broker's agency (consome vez normal)
+  const lastBroker = lastBrokerFromAgency(brokers, referred.agency, excludeIds);
+  return { broker: lastBroker, consumesVez: true, source: 'last_of_agency' };
+}
+
+/**
+ * Unified dispatch: picks the next broker for any queue type based on the current dispatch mode.
+ * - Pre-sorteio (arrival): Vez Geral uses arrival order, Decorado uses inverse arrival order.
+ * - Pós-sorteio: Vez Geral uses intercalation, Decorado uses inverse sorteio.
+ * - Indicação: uses hierarchical transbordo.
+ */
+export function dispatchBroker(
+  brokers: Broker[],
+  queueType: QueueType,
+  simSeconds: number,
+  excludeIds: Set<string>,
+  lastCalledAgency: Agency | null,
+  referredBrokerId: string | null,
+): { broker: Broker | undefined; agency: Agency; consumesVez: boolean } {
+  const mode = getDispatchMode(simSeconds);
+  const isPreSorteio = mode === 'arrival';
+
+  // Indicação always uses hierarchical transbordo regardless of time
+  if (referredBrokerId) {
+    const result = resolveIndicacaoBroker(brokers, referredBrokerId, excludeIds);
+    return {
+      broker: result.broker,
+      agency: result.broker?.agency ?? 'Viva Imóveis',
+      consumesVez: result.consumesVez,
+    };
+  }
+
+  if (queueType === 'parceria') {
+    return { broker: undefined, agency: 'Externo', consumesVez: false };
+  }
+
+  if (queueType === 'decorado') {
+    if (isPreSorteio) {
+      const broker = nextBrokerByArrivalInverse(brokers, excludeIds);
+      return { broker, agency: broker?.agency ?? 'Viva Imóveis', consumesVez: true };
+    }
+    const broker = nextBrokerFromInverseTop(brokers, excludeIds);
+    return { broker, agency: broker?.agency ?? 'Viva Imóveis', consumesVez: true };
+  }
+
+  // Geral
+  if (isPreSorteio) {
+    const broker = nextBrokerByArrivalAnyAgency(brokers, excludeIds);
+    return { broker, agency: broker?.agency ?? 'Viva Imóveis', consumesVez: true };
+  }
+
+  // Pós-sorteio: intercalation
+  const { broker, agency } = nextBrokerForGeneralQueue(brokers, lastCalledAgency, excludeIds);
+  return { broker, agency, consumesVez: true };
 }
 
 /**

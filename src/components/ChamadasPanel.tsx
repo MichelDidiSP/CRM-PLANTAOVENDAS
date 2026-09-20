@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { Volume2, VolumeX, Timer, Users, Building2, Zap, Chrome as Home, ArrowLeftRight, TriangleAlert as AlertTriangle } from 'lucide-react';
+import { Volume2, VolumeX, Timer, Users, Building2, Zap, Chrome as Home, ArrowLeftRight, TriangleAlert as AlertTriangle, History } from 'lucide-react';
 import { supabase, type Broker, type QueueEntry, type Agency } from '@/lib/supabase';
 import { formatTime, nextBrokerFromInverseTop, nextBrokerFromAgency, nextBrokerByArrival } from '@/lib/queueEngine';
 import { useSim } from '@/lib/simContext';
@@ -189,6 +189,12 @@ export default function ChamadasPanel({ queue, brokers }: Props) {
   const vivaWaiting = queue.filter((e) => e.queue_status === 'aguardando' && e.agency === 'Viva Imóveis').length;
   const nobreWaiting = queue.filter((e) => e.queue_status === 'aguardando' && e.agency === 'Casa Nobre').length;
 
+  // Histórico das últimas 5 chamadas realizadas
+  const callHistory = queue
+    .filter((e) => e.called_at && (e.queue_status === 'em_atendimento' || e.queue_status === 'concluido' || e.queue_status === 'chamando'))
+    .sort((a, b) => new Date(b.called_at!).getTime() - new Date(a.called_at!).getTime())
+    .slice(0, 5);
+
   const broker = currentCall?.broker_id ? brokers.find((b) => b.id === currentCall.broker_id) : undefined;
   const brokerName = broker?.operational_name ?? 'A definir';
   const brokerAgency = broker?.agency ?? currentCall?.agency ?? '—';
@@ -358,6 +364,30 @@ export default function ChamadasPanel({ queue, brokers }: Props) {
                 <span className="text-xs text-slate-400">{entry.visit?.visit_reason}</span>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Histórico de Últimas Chamadas */}
+      {callHistory.length > 0 && (
+        <div className="bg-slate-900 rounded-2xl border border-amber-500/20 p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <History className="h-5 w-5 text-amber-400" />
+            <h3 className="font-bold text-amber-400">Últimas Chamadas</h3>
+          </div>
+          <div className="space-y-2">
+            {callHistory.map((entry) => {
+              const histBroker = entry.broker_id ? brokers.find((b) => b.id === entry.broker_id) : undefined;
+              const reasonLabel = entry.queue_type === 'decorado' ? 'Decorado' : entry.queue_type === 'parceria' ? 'Parceria' : entry.visit?.visit_reason ?? 'Vez Geral';
+              const callTime = entry.called_at ? new Date(entry.called_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—';
+              return (
+                <div key={entry.id} className="flex items-center gap-3 bg-slate-800/50 rounded-xl p-3">
+                  <span className="text-white text-sm font-medium flex-1">{histBroker?.operational_name ?? '—'}</span>
+                  <span className={`text-xs px-2 py-0.5 rounded-full ${entry.queue_type === 'decorado' ? 'bg-orange-500/15 text-orange-400' : entry.queue_type === 'parceria' ? 'bg-sky-500/15 text-sky-400' : 'bg-amber-500/15 text-amber-400'}`}>{reasonLabel}</span>
+                  <span className="text-xs text-slate-400 font-mono">{callTime}</span>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}

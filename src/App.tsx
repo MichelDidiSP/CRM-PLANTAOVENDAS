@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { Building2, DoorOpen, Tv, Users, ListOrdered, Zap, Clock, Plus, Shuffle, ClipboardList, RefreshCw, FileText, X, Trophy, Calendar, Sun, Moon, ArrowRight } from 'lucide-react';
+import { Building2, DoorOpen, Tv, Users, ListOrdered, Zap, Clock, Plus, Shuffle, ClipboardList, RefreshCw, FileText, X, Trophy, Calendar, Sun, Moon, ArrowRight, Home } from 'lucide-react';
 import { supabase, type Broker, type QueueEntry, type Visit, type PlantaoSession } from '@/lib/supabase';
 import { fetchAll, interleaveQueue, executeSorteio, reiniciarPlantao, transitionToAfternoon, type SorteioResult } from '@/lib/queueEngine';
 import { SimProvider, useSim } from '@/lib/simContext';
@@ -397,21 +397,43 @@ function AuditoriaPanel({ sorteioResult, brokers, queue, attendanceReport }: {
               </div>
             </div>
 
-            {/* Fila Geral unificada */}
-            <div className="bg-slate-800/30 border border-slate-700/50 rounded-xl p-4">
-              <h3 className="font-bold text-slate-200 mb-3 flex items-center gap-2"><ListOrdered className="h-4 w-4" /> Fila Geral Unificada (intercalada)</h3>
-              <div className="space-y-1.5">
-                {sorteioResult.interleavedBrokers.map((b, i) => {
-                  const isLate = sorteioResult.lateBrokers.includes(b);
-                  return (
-                    <div key={b.id} className="flex items-center gap-3 bg-slate-900/60 rounded-lg p-2.5">
-                      <span className="font-mono text-sm text-slate-500 w-8 text-center">{i + 1}.</span>
-                      <span className="text-white text-sm font-medium flex-1">{b.operational_name}</span>
-                      <span className={`text-xs px-2 py-0.5 rounded-full ${b.agency === 'Viva Imóveis' ? 'bg-amber-500/15 text-amber-400' : 'bg-sky-500/15 text-sky-400'}`}>{b.agency}</span>
-                      {isLate && <span className="text-xs px-2 py-0.5 rounded-full bg-red-500/15 text-red-400">Atrasado</span>}
-                    </div>
-                  );
-                })}
+            {/* Fila Geral + Fila Inversa side by side */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Fila Geral Direta */}
+              <div className="bg-slate-800/30 border border-slate-700/50 rounded-xl p-4">
+                <h3 className="font-bold text-slate-200 mb-3 flex items-center gap-2"><ListOrdered className="h-4 w-4" /> Fila Geral Direta (intercalada)</h3>
+                <div className="space-y-1.5">
+                  {sorteioResult.interleavedBrokers.map((b, i) => {
+                    const isLate = sorteioResult.lateBrokers.includes(b);
+                    return (
+                      <div key={b.id} className="flex items-center gap-3 bg-slate-900/60 rounded-lg p-2.5">
+                        <span className="font-mono text-sm text-slate-500 w-8 text-center">{i + 1}.</span>
+                        <span className="text-white text-sm font-medium flex-1">{b.operational_name}</span>
+                        <span className={`text-xs px-2 py-0.5 rounded-full ${b.agency === 'Viva Imóveis' ? 'bg-amber-500/15 text-amber-400' : 'bg-sky-500/15 text-sky-400'}`}>{b.agency}</span>
+                        {isLate && <span className="text-xs px-2 py-0.5 rounded-full bg-red-500/15 text-red-400">Atrasado</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Fila Inversa Geral (Visita ao Decorado) */}
+              <div className="bg-orange-500/5 border border-orange-500/20 rounded-xl p-4">
+                <h3 className="font-bold text-orange-400 mb-3 flex items-center gap-2"><Home className="h-4 w-4" /> Fila Inversa Geral (Visita ao Decorado)</h3>
+                <div className="space-y-1.5">
+                  {[...sorteioResult.interleavedBrokers].reverse().map((b, i) => {
+                    const isLate = sorteioResult.lateBrokers.includes(b);
+                    return (
+                      <div key={b.id} className="flex items-center gap-3 bg-slate-900/60 rounded-lg p-2.5">
+                        <span className="font-mono text-sm text-orange-400/60 w-8 text-center">{i + 1}.</span>
+                        <span className="text-white text-sm font-medium flex-1">{b.operational_name}</span>
+                        <span className={`text-xs px-2 py-0.5 rounded-full ${b.agency === 'Viva Imóveis' ? 'bg-amber-500/15 text-amber-400' : 'bg-sky-500/15 text-sky-400'}`}>{b.agency}</span>
+                        {isLate && <span className="text-xs px-2 py-0.5 rounded-full bg-red-500/15 text-red-400">Atrasado</span>}
+                      </div>
+                    );
+                  })}
+                  {sorteioResult.interleavedBrokers.length === 0 && <p className="text-sm text-slate-500">Fila inversa vazia.</p>}
+                </div>
               </div>
             </div>
           </div>
@@ -465,20 +487,68 @@ function AuditoriaPanel({ sorteioResult, brokers, queue, attendanceReport }: {
         </div>
       )}
 
-      {/* Estado atual dos corretores */}
-      <div className="bg-slate-900 rounded-2xl border border-slate-800 p-6">
-        <h3 className="font-bold text-slate-200 mb-4">Estado atual dos corretores</h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {brokers.filter((b) => !b.is_external_partner).map((b) => (
-            <div key={b.id} className="flex items-center gap-3 bg-slate-800/50 rounded-lg p-3">
-              <span className="text-white text-sm font-medium flex-1">{b.operational_name}</span>
-              <span className={`text-xs px-2 py-0.5 rounded-full ${b.agency === 'Viva Imóveis' ? 'bg-amber-500/15 text-amber-400' : 'bg-sky-500/15 text-sky-400'}`}>{b.agency}</span>
-              {b.sorteio_order != null && <span className="text-xs text-slate-400">Posição: {b.sorteio_order}</span>}
-              {b.afternoon_reserved && <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-400">Vaga reservada</span>}
-              {b.shift && <span className={`text-xs px-2 py-0.5 rounded-full ${b.shift === 'manha' ? 'bg-amber-500/15 text-amber-400' : 'bg-indigo-500/15 text-indigo-400'}`}>{b.shift === 'manha' ? 'Manhã' : 'Tarde'}</span>}
-              <span className={`text-xs px-2 py-0.5 rounded-full ${b.presence_status === 'presente' ? 'bg-emerald-500/15 text-emerald-400' : b.presence_status === 'pausa' ? 'bg-amber-500/15 text-amber-400' : 'bg-slate-600/30 text-slate-400'}`}>{b.presence_status}</span>
+      {/* DUAS FILAS INDEPENDENTES — Tempo Real */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Tabela 1: Fila Geral Direta */}
+        <div className="bg-slate-900 rounded-2xl border border-amber-500/20 p-6">
+          <div className="flex items-center gap-3 mb-5">
+            <div className="bg-amber-500/10 p-3 rounded-xl"><ListOrdered className="h-6 w-6 text-amber-400" /></div>
+            <div>
+              <h2 className="text-xl font-bold text-amber-400">Fila Geral Direta</h2>
+              <p className="text-sm text-slate-400">Vez Geral / Primeira Visita</p>
             </div>
-          ))}
+          </div>
+          <div className="space-y-2">
+            {[...brokers]
+              .filter((b) => !b.is_external_partner && b.presence_status === 'presente')
+              .sort((a, b) => (a.sorteio_order ?? 999) - (b.sorteio_order ?? 999))
+              .map((b, i) => {
+                const statusLabel = b.attendance_status === 'em_mesa' ? 'Chamado' : b.attendance_status === 'livre' ? 'Livre' : b.attendance_status === 'decorado' ? 'Em Atendimento' : b.presence_status === 'pausa' ? 'Pausado' : b.attendance_status;
+                const statusColor = b.attendance_status === 'livre' ? 'bg-emerald-500/15 text-emerald-400' : b.attendance_status === 'em_mesa' ? 'bg-amber-500/15 text-amber-400' : b.attendance_status === 'decorado' ? 'bg-sky-500/15 text-sky-400' : b.presence_status === 'pausa' ? 'bg-red-500/15 text-red-400' : 'bg-slate-600/30 text-slate-400';
+                return (
+                  <div key={b.id} className="flex items-center gap-3 bg-slate-800/50 rounded-lg p-3 border border-amber-500/10">
+                    <span className="font-mono text-sm text-amber-400/60 w-8 text-center font-bold">{i + 1}.</span>
+                    <span className="text-white text-sm font-medium flex-1">{b.operational_name}</span>
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${b.agency === 'Viva Imóveis' ? 'bg-amber-500/15 text-amber-400' : 'bg-sky-500/15 text-sky-400'}`}>{b.agency}</span>
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${statusColor}`}>{statusLabel}</span>
+                  </div>
+                );
+              })}
+            {brokers.filter((b) => !b.is_external_partner && b.presence_status === 'presente').length === 0 && (
+              <p className="text-sm text-slate-500 text-center py-6">Nenhum corretor presente.</p>
+            )}
+          </div>
+        </div>
+
+        {/* Tabela 2: Fila Inversa Geral */}
+        <div className="bg-slate-900 rounded-2xl border border-orange-500/20 p-6">
+          <div className="flex items-center gap-3 mb-5">
+            <div className="bg-orange-500/10 p-3 rounded-xl"><Home className="h-6 w-6 text-orange-400" /></div>
+            <div>
+              <h2 className="text-xl font-bold text-orange-400">Fila Inversa Geral</h2>
+              <p className="text-sm text-slate-400">Visita ao Decorado</p>
+            </div>
+          </div>
+          <div className="space-y-2">
+            {[...brokers]
+              .filter((b) => !b.is_external_partner && b.presence_status === 'presente')
+              .sort((a, b) => (b.sorteio_order ?? 0) - (a.sorteio_order ?? 0))
+              .map((b, i) => {
+                const statusLabel = b.attendance_status === 'em_mesa' ? 'Chamado' : b.attendance_status === 'livre' ? 'Livre' : b.attendance_status === 'decorado' ? 'Em Atendimento' : b.presence_status === 'pausa' ? 'Pausado' : b.attendance_status;
+                const statusColor = b.attendance_status === 'livre' ? 'bg-emerald-500/15 text-emerald-400' : b.attendance_status === 'em_mesa' ? 'bg-amber-500/15 text-amber-400' : b.attendance_status === 'decorado' ? 'bg-sky-500/15 text-sky-400' : b.presence_status === 'pausa' ? 'bg-red-500/15 text-red-400' : 'bg-slate-600/30 text-slate-400';
+                return (
+                  <div key={b.id} className="flex items-center gap-3 bg-slate-800/50 rounded-lg p-3 border border-orange-500/10">
+                    <span className="font-mono text-sm text-orange-400/60 w-8 text-center font-bold">{i + 1}.</span>
+                    <span className="text-white text-sm font-medium flex-1">{b.operational_name}</span>
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${b.agency === 'Viva Imóveis' ? 'bg-amber-500/15 text-amber-400' : 'bg-sky-500/15 text-sky-400'}`}>{b.agency}</span>
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${statusColor}`}>{statusLabel}</span>
+                  </div>
+                );
+              })}
+            {brokers.filter((b) => !b.is_external_partner && b.presence_status === 'presente').length === 0 && (
+              <p className="text-sm text-slate-500 text-center py-6">Nenhum corretor presente.</p>
+            )}
+          </div>
         </div>
       </div>
     </div>

@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, useRef, useCallback, type ReactNode } from 'react';
 import type { Shift } from './supabase';
+import { isManhaSorteioActive as checkManhaSorteio } from './queueEngine';
 
 // Shift windows (seconds since midnight)
 const MANHA_START = 8 * 3600;          // 08:00:00 — check-in opens
@@ -41,6 +42,7 @@ type SimContextType = {
   isCheckinOpen: boolean;
   isAtendimentoActive: boolean;
   isShiftTransition: boolean;
+  isManhaSorteioActive: boolean;
 };
 
 const SimContext = createContext<SimContextType | null>(null);
@@ -179,6 +181,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
   const isCheckinOpen = simSeconds >= boundaries.checkinOpen && simSeconds <= boundaries.checkinLimit;
   const isAtendimentoActive = simSeconds >= boundaries.atendStart && simSeconds < boundaries.atendEnd;
   const isShiftTransition = simSeconds >= MANHA_ATEND_END && simSeconds < MANHA_ATEND_END + 60;
+  const manhaSorteioActive = checkManhaSorteio(simSeconds);
 
   return (
     <SimContext.Provider
@@ -202,6 +205,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
         isCheckinOpen,
         isAtendimentoActive,
         isShiftTransition,
+        isManhaSorteioActive: manhaSorteioActive,
       }}
     >
       {children}
