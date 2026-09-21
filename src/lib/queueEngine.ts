@@ -4,6 +4,8 @@ const LATE_LIMIT_MANHA = 8 * 3600 + 45 * 60 + 59; // 08:45:59
 const LATE_LIMIT_TARDE = 13 * 3600 + 45 * 60 + 59; // 13:45:59
 export const SORTEIO_MANHA = 8 * 3600 + 46 * 60;  // 08:46:00
 export const SORTEIO_TARDE = 13 * 3600 + 46 * 60; // 13:46:00
+export const ATENDIMENTO_MANHA_START = 9 * 3600;       // 09:00:00 — roleta assumes command
+export const ATENDIMENTO_TARDE_START = 14 * 3600;      // 14:00:00
 
 export function secondsSinceMidnight(date: Date): number {
   return date.getHours() * 3600 + date.getMinutes() * 60 + date.getSeconds();
