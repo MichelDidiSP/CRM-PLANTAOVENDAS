@@ -1,9 +1,11 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL ?? '';
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY ?? '';
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: { persistSession: false },
+});
 
 export type Agency = 'Viva Imóveis' | 'Casa Nobre' | 'Externo';
 export type VisitReason = 'Primeira visita' | 'Retorno' | 'Indicação' | 'Parceria' | 'Visita ao Decorado' | 'Indicação Presente' | 'Indicação Ausente' | 'Indicação Imobiliária';
