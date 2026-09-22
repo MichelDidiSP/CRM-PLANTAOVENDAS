@@ -28,9 +28,16 @@ function AppContent() {
   const sorteioExecutedRef = useRef(false);
   const transitionExecutedRef = useRef(false);
 
+  const [loadError, setLoadError] = useState<string | null>(null);
+
   const load = useCallback(async () => {
     const data = await fetchAll();
-    if (data.error) return;
+    if (data.error) {
+      setLoadError('Não foi possível conectar ao banco de dados. Verifique a conexão e tente novamente.');
+      setLoading(false);
+      return;
+    }
+    setLoadError(null);
     setBrokers(data.brokers);
     setVisits(data.visits);
     setQueue(data.queue);
@@ -122,7 +129,26 @@ function AppContent() {
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center">
-        <div className="text-slate-400 text-lg">A carregar plantão…</div>
+        <div className="text-center">
+          <div className="inline-block h-8 w-8 animate-spin rounded-full border-2 border-amber-400 border-t-transparent mb-4" />
+          <div className="text-slate-400 text-lg">A carregar plantão…</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (loadError && brokers.length === 0) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <div className="text-center max-w-md mx-4">
+          <div className="bg-red-500/10 border border-red-500/30 rounded-2xl p-8">
+            <h2 className="text-xl font-bold text-red-400 mb-2">Erro de conexão</h2>
+            <p className="text-slate-400 text-sm mb-4">{loadError}</p>
+            <button onClick={() => { setLoading(true); load(); }} className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold px-6 py-2.5 rounded-xl transition">
+              Tentar novamente
+            </button>
+          </div>
+        </div>
       </div>
     );
   }
