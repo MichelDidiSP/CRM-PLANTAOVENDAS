@@ -1,4 +1,4 @@
-import { supabase, type Broker, type QueueEntry, type Visit, type VisitReason, type Agency, type QueueType, type PlantaoSession, type Shift } from './supabase';
+import { supabase, dbReady, type Broker, type QueueEntry, type Visit, type VisitReason, type Agency, type QueueType, type PlantaoSession, type Shift } from './supabase';
 
 const LATE_LIMIT_MANHA = 8 * 3600 + 45 * 60 + 59; // 08:45:59
 const LATE_LIMIT_TARDE = 13 * 3600 + 45 * 60 + 59; // 13:45:59
@@ -557,6 +557,7 @@ export function nextBrokerFromInverseQueue(brokers: Broker[], sortedQueue: Queue
 }
 
 export async function fetchAll() {
+  await dbReady;
   const [brokersRes, visitsRes, queueRes, sessionsRes] = await Promise.all([
     supabase.from('brokers').select('*').order('created_at', { ascending: true }),
     supabase.from('visits').select('*').order('created_at', { ascending: true }),

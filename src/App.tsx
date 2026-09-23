@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { Building2, DoorOpen, Tv, Users, ListOrdered, Zap, Clock, Plus, Shuffle, ClipboardList, RefreshCw, FileText, X, Trophy, Calendar, Sun, Moon, ArrowRight, Home } from 'lucide-react';
-import { supabase, type Broker, type QueueEntry, type Visit, type PlantaoSession } from '@/lib/supabase';
+import { Building2, DoorOpen, Tv, Users, ListOrdered, Zap, Clock, Plus, Shuffle, ClipboardList, RefreshCw, FileText, X, Trophy, Calendar, Sun, Moon, ArrowRight, Home, Database } from 'lucide-react';
+import { supabase, dbReady, type Broker, type QueueEntry, type Visit, type PlantaoSession } from '@/lib/supabase';
 import { fetchAll, interleaveQueue, executeSorteio, reiniciarPlantao, transitionToAfternoon, type SorteioResult } from '@/lib/queueEngine';
 import { SimProvider, useSim } from '@/lib/simContext';
 
@@ -29,6 +29,9 @@ function AppContent() {
   const transitionExecutedRef = useRef(false);
 
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [dbConnected, setDbConnected] = useState<boolean | null>(null);
+
+  useEffect(() => { dbReady.then((isReal) => setDbConnected(isReal)); }, []);
 
   const load = useCallback(async () => {
     const data = await fetchAll();

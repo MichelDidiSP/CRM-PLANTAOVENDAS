@@ -1,10 +1,46 @@
 import { createClient } from '@supabase/supabase-js';
+import { createMockClient } from './mockClient';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL ?? '';
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY ?? '';
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+const realClient = createClient(supabaseUrl, supabaseAnonKey, {
   auth: { persistSession: false },
+});
+const mockClient = createMockClient();
+
+let usingMock = false;
+let probePromise: Promise<boolean> | null = null;
+
+function probeReal(): Promise<boolean> {
+  if (probePromise) return probePromise;
+  probePromise = new Promise((resolve) => {
+    const timeout = setTimeout(() => resolve(false), 4000);
+    realClient
+      .from('brokers')
+      .select('id')
+      .limit(1)
+      .then(() => { clearTimeout(timeout); resolve(true); })
+      .catch(() => { clearTimeout(timeout); resolve(false); });
+  });
+  return probePromise;
+}
+
+const handler: ProxyHandler<typeof realClient> = {
+  get(_target, prop) {
+    if (usingMock) return (mockClient as any)[prop];
+    return (realClient as any)[prop];
+  },
+};
+
+export const supabase = new Proxy(realClient, handler) as typeof realClient;
+
+export const dbReady = probeReal().then((ok) => {
+  if (!ok) {
+    usingMock = true;
+    console.warn('Supabase indisponível — usando banco de dados local em memória.');
+  }
+  return !usingMock;
 });
 
 export type Agency = 'Viva Imóveis' | 'Casa Nobre' | 'Externo';
