@@ -68,6 +68,17 @@ export function isArrivalOrderMode(simSeconds: number): boolean {
 }
 
 /**
+ * Arrival-order dispatch lock: the roleta's sorteio fires at 08:46h but does NOT
+ * take command of dispatch until 09:00h sharp. Between 08:46h and 08:59:59 the
+ * motor still dispatches by arrival order (ponto timestamp), ignoring the sorteio.
+ */
+export function isArrivalOrderDispatchActive(simSeconds: number): boolean {
+  if (simSeconds < ATENDIMENTO_MANHA_START) return true;
+  if (simSeconds >= SORTEIO_TARDE && simSeconds < ATENDIMENTO_TARDE_START) return true;
+  return false;
+}
+
+/**
  * Is the morning sorteio still governing the plantao (08:46h to 13:59h)?
  */
 export function isManhaSorteioActive(simSeconds: number): boolean {
@@ -323,7 +334,7 @@ function sortKey(entries: QueueEntry[], brokers: Broker[], entry: QueueEntry): n
 export function nextBrokerFromAgency(brokers: Broker[], agency: Agency, excludeIds: Set<string>): Broker | undefined {
   const agencyBrokers = brokers
     .filter((b) => !b.is_external_partner && b.agency === agency && b.presence_status === 'presente' && b.attendance_status === 'livre' && !excludeIds.has(b.id))
-    .sort((a, b) => (a.sorteio_order ?? 999) - (b.sorteio_order ?? 999));
+    .sort((a, b) => (a.sorteio_order ?? 999_999) - (b.sorteio_order ?? 999_999));
 
   return agencyBrokers[0];
 }
@@ -344,7 +355,7 @@ export function nextBrokerForGeneralQueue(
 ): { broker: Broker | undefined; agency: Agency } {
   const available = brokers
     .filter((b) => !b.is_external_partner && b.presence_status === 'presente' && b.attendance_status === 'livre' && !excludeIds.has(b.id))
-    .sort((a, b) => (a.sorteio_order ?? 999) - (b.sorteio_order ?? 999));
+    .sort((a, b) => (a.sorteio_order ?? 999_999) - (b.sorteio_order ?? 999_999));
 
   const broker = available[0];
   return { broker, agency: broker?.agency ?? 'Viva Imóveis' };
@@ -475,7 +486,7 @@ export function dispatchBroker(
   referredBrokerId: string | null,
 ): { broker: Broker | undefined; agency: Agency; consumesVez: boolean } {
   const mode = getDispatchMode(simSeconds);
-  const isPreSorteio = mode === 'arrival';
+  const isPreSorteio = isArrivalOrderDispatchActive(simSeconds);
 
   // Indicação always uses hierarchical transbordo regardless of time
   if (referredBrokerId) {
@@ -537,7 +548,11 @@ export async function moveBrokerToEndOfQueue(brokerId: string, brokers: Broker[]
 export function nextBrokerFromInverseTop(brokers: Broker[], excludeIds: Set<string>): Broker | undefined {
   const available = brokers
     .filter((b) => !b.is_external_partner && b.presence_status === 'presente' && b.attendance_status === 'livre' && !excludeIds.has(b.id))
-    .sort((a, b) => (b.sorteio_order ?? 999) - (a.sorteio_order ?? 999));
+    .sort((a, b) => {
+      const aOrder = a.sorteio_order ?? 999_999;
+      const bOrder = b.sorteio_order ?? 999_999;
+      return bOrder - aOrder;
+    });
   return available[0];
 }
 

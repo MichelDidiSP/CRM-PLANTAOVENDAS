@@ -476,6 +476,37 @@ function AuditoriaPanel({ sorteioResult, brokers, queue, attendanceReport }: {
         </div>
       )}
 
+      {/* FILA DE ORDEM DE CHEGADA — fixada para auditoria */}
+      <div className="bg-slate-900 rounded-2xl border border-sky-500/20 p-6">
+        <div className="flex items-center gap-3 mb-5">
+          <div className="bg-sky-500/10 p-3 rounded-xl"><Clock className="h-6 w-6 text-sky-400" /></div>
+          <div>
+            <h2 className="text-xl font-bold text-sky-400">Fila de Ordem de Chegada</h2>
+            <p className="text-sm text-slate-400">Ordem cronológica do ponto (timestamp de check-in) — válida até 09:00h</p>
+          </div>
+        </div>
+        <div className="space-y-2">
+          {[...brokers]
+            .filter((b) => !b.is_external_partner && b.presence_status === 'presente' && b.arrived_at)
+            .sort((a, b) => new Date(a.arrived_at!).getTime() - new Date(b.arrived_at!).getTime())
+            .map((b, i) => {
+              const late = isLateForSort(b.arrived_at, b.shift ?? 'manha');
+              return (
+                <div key={b.id} className={`flex items-center gap-3 rounded-lg p-3 border ${late ? 'bg-red-500/5 border-red-500/20' : 'bg-slate-800/50 border-sky-500/10'}`}>
+                  <span className="font-mono text-sm text-sky-400/60 w-8 text-center font-bold">{i + 1}.</span>
+                  <span className="text-white text-sm font-medium flex-1">{b.operational_name}</span>
+                  <span className={`text-xs px-2 py-0.5 rounded-full ${b.agency === 'Viva Imóveis' ? 'bg-amber-500/15 text-amber-400' : 'bg-sky-500/15 text-sky-400'}`}>{b.agency}</span>
+                  <span className="text-xs text-slate-500 font-mono">{new Date(b.arrived_at!).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+                  {late && <span className="text-xs px-2 py-0.5 rounded-full bg-red-500/15 text-red-400">Atrasado</span>}
+                </div>
+              );
+            })}
+          {brokers.filter((b) => !b.is_external_partner && b.presence_status === 'presente' && b.arrived_at).length === 0 && (
+            <p className="text-sm text-slate-500 text-center py-6">Nenhum corretor registrou presença ainda.</p>
+          )}
+        </div>
+      </div>
+
       {/* DUAS FILAS INDEPENDENTES — Tempo Real */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Tabela 1: Fila Geral Direta */}

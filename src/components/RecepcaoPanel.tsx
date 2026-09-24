@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react';
 import { UserPlus, Phone, TriangleAlert as AlertTriangle, CircleCheck as CheckCircle2, Clock, Search, EyeOff, Eye, Zap, UserCheck, UserX, Building2, Trash2 } from 'lucide-react';
 import { supabase, type Broker, type Visit, type VisitReason, type Agency } from '@/lib/supabase';
-import { REASONS, QUICK_REASONS, sanitizePhone, formatPhoneDisplay, lastBrokerFromAgency, nextBrokerFromAgency, nextBrokerByArrival, nextBrokerFromInverseTop, nextBrokerByArrivalAnyAgency, nextBrokerByArrivalInverse, nextBrokerForGeneralQueue, dispatchBroker, isArrivalOrderMode } from '@/lib/queueEngine';
+import { REASONS, QUICK_REASONS, sanitizePhone, formatPhoneDisplay, lastBrokerFromAgency, nextBrokerFromAgency, nextBrokerByArrival, nextBrokerFromInverseTop, nextBrokerByArrivalAnyAgency, nextBrokerByArrivalInverse, nextBrokerForGeneralQueue, dispatchBroker, isArrivalOrderDispatchActive } from '@/lib/queueEngine';
 import { useSim } from '@/lib/simContext';
 
 type QuickReason = VisitReason;
@@ -26,7 +26,12 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
   const [quickReason, setQuickReason] = useState<QuickReason>('Primeira visita');
   const [quickBrokerId, setQuickBrokerId] = useState<string>('');
   const [quickSubmitting, setQuickSubmitting] = useState(false);
-  const quickCounterRef = useRef(0);
+  const quickCounterRef = useRef(() => {
+    try {
+      const stored = localStorage.getItem('global_client_counter');
+      return stored ? parseInt(stored, 10) : 0;
+    } catch { return 0; }
+  }());
   const [discardCount, setDiscardCount] = useState(5);
   const [discarding, setDiscarding] = useState(false);
 
@@ -138,9 +143,11 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
   async function handleQuickEntry() {
     setQuickSubmitting(true);
     quickCounterRef.current += 1;
+    try { localStorage.setItem('global_client_counter', String(quickCounterRef.current)); } catch { /* ignore */ }
     const seq = quickCounterRef.current;
     const fakeName = `Cliente #${String(seq).padStart(2, '0')}`;
-    const fakePhone = `119${Date.now()}${seq}`.slice(0, 13);
+    const phoneSuffix = String(Date.now()).slice(-8);
+    const fakePhone = `119${phoneSuffix}`;
     const simTimestamp = getCurrentTime().toISOString();
 
     const isParceriaQuick = quickReason === 'Parceria';
@@ -213,7 +220,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
       assignedBrokerId = lastBroker?.id ?? null;
     } else if (isDecoradoQuick) {
       // Decorado: pre-sorteio uses inverse arrival order; post-sorteio uses inverse sorteio
-      if (isArrivalOrderMode(simSeconds)) {
+      if (isArrivalOrderDispatchActive(simSeconds)) {
         const broker = nextBrokerByArrivalInverse(brokers, busyIds);
         assignedBrokerId = broker?.id ?? null;
       } else {
@@ -223,7 +230,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
     } else if (!isParceriaQuick) {
       // Geral: pre-sorteio uses pure arrival order across all agencies;
       // post-sorteio scans the intercalated queue top-to-bottom for first 'Livre' broker
-      if (isArrivalOrderMode(simSeconds)) {
+      if (isArrivalOrderDispatchActive(simSeconds)) {
         const broker = nextBrokerByArrivalAnyAgency(brokers, busyIds);
         assignedBrokerId = broker?.id ?? null;
       } else {

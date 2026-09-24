@@ -27,7 +27,16 @@ export default function CorretorPanel({ brokers }: Props) {
   async function updatePresence(broker: Broker, status: BrokerPresence) {
     const now = getCurrentTime().toISOString();
     const updates: Partial<Broker> & { last_status_update: string } = { presence_status: status, last_status_update: now };
-    if (status === 'presente' && !broker.arrived_at) { updates.arrived_at = now; updates.shift = currentShift; }
+    if (status === 'presente' && !broker.arrived_at) {
+      updates.arrived_at = now;
+      updates.shift = currentShift;
+      const isLate = isLateForSort(now, currentShift);
+      if (isLate) {
+        const sameShift = internalBrokers.filter((b) => b.shift === currentShift && b.sorteio_order != null);
+        const maxOrder = sameShift.length > 0 ? Math.max(...sameShift.map((b) => b.sorteio_order ?? 0)) : 0;
+        updates.sorteio_order = maxOrder + 1;
+      }
+    }
     await supabase.from('brokers').update(updates).eq('id', broker.id);
   }
 
