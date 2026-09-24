@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { Building2, DoorOpen, Tv, Users, ListOrdered, Zap, Clock, Plus, Shuffle, ClipboardList, RefreshCw, FileText, X, Trophy, Calendar, Sun, Moon, ArrowRight, Home, Database } from 'lucide-react';
 import { supabase, dbReady, type Broker, type QueueEntry, type Visit, type PlantaoSession } from '@/lib/supabase';
-import { fetchAll, interleaveQueue, executeSorteio, reiniciarPlantao, transitionToAfternoon, type SorteioResult } from '@/lib/queueEngine';
+import { fetchAll, interleaveQueue, executeSorteio, reiniciarPlantao, transitionToAfternoon, isLateForSort, type SorteioResult } from '@/lib/queueEngine';
 import { SimProvider, useSim } from '@/lib/simContext';
 
 import RecepcaoPanel from '@/components/RecepcaoPanel';

@@ -26,12 +26,14 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
   const [quickReason, setQuickReason] = useState<QuickReason>('Primeira visita');
   const [quickBrokerId, setQuickBrokerId] = useState<string>('');
   const [quickSubmitting, setQuickSubmitting] = useState(false);
-  const quickCounterRef = useRef(() => {
-    try {
-      const stored = localStorage.getItem('global_client_counter');
-      return stored ? parseInt(stored, 10) : 0;
-    } catch { return 0; }
-  }());
+  const quickCounterRef = useRef<number>(
+    (() => {
+      try {
+        const stored = localStorage.getItem('global_client_counter');
+        return stored ? parseInt(stored, 10) : 0;
+      } catch { return 0; }
+    })(),
+  );
   const [discardCount, setDiscardCount] = useState(5);
   const [discarding, setDiscarding] = useState(false);
 
