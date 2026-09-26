@@ -350,15 +350,28 @@ export function nextBrokerFromAgency(brokers: Broker[], agency: Agency, excludeI
  */
 export function nextBrokerForGeneralQueue(
   brokers: Broker[],
-  _lastCalledAgency: Agency | null,
+  lastCalledAgency: Agency | null,
   excludeIds: Set<string>,
 ): { broker: Broker | undefined; agency: Agency } {
-  const available = brokers
-    .filter((b) => !b.is_external_partner && b.presence_status === 'presente' && b.attendance_status === 'livre' && !excludeIds.has(b.id))
-    .sort((a, b) => (a.sorteio_order ?? 999_999) - (b.sorteio_order ?? 999_999));
+  // Determine which agency's turn it is (opposite of last called, or sorteio start)
+  let nextAgency: Agency;
+  if (lastCalledAgency) {
+    nextAgency = lastCalledAgency === 'Viva Imóveis' ? 'Casa Nobre' : 'Viva Imóveis';
+  } else {
+    const sorted = brokers
+      .filter((b) => !b.is_external_partner && b.sorteio_order != null)
+      .sort((a, b) => (a.sorteio_order ?? 0) - (b.sorteio_order ?? 0));
+    nextAgency = sorted[0]?.agency ?? 'Viva Imóveis';
+  }
 
-  const broker = available[0];
-  return { broker, agency: broker?.agency ?? 'Viva Imóveis' };
+  // Try the agency whose turn it is — find first Livre broker from that agency
+  const broker = nextBrokerFromAgency(brokers, nextAgency, excludeIds);
+  if (broker) return { broker, agency: broker.agency };
+
+  // Caos: no Livre from that agency → transbord to the other agency
+  const otherAgency: Agency = nextAgency === 'Viva Imóveis' ? 'Casa Nobre' : 'Viva Imóveis';
+  const otherBroker = nextBrokerFromAgency(brokers, otherAgency, excludeIds);
+  return { broker: otherBroker, agency: otherBroker?.agency ?? nextAgency };
 }
 
 /**
@@ -485,7 +498,6 @@ export function dispatchBroker(
   lastCalledAgency: Agency | null,
   referredBrokerId: string | null,
 ): { broker: Broker | undefined; agency: Agency; consumesVez: boolean } {
-  const mode = getDispatchMode(simSeconds);
   const isPreSorteio = isArrivalOrderDispatchActive(simSeconds);
 
   // Indicação always uses hierarchical transbordo regardless of time
@@ -546,14 +558,37 @@ export async function moveBrokerToEndOfQueue(brokerId: string, brokers: Broker[]
  * Excludes brokers currently busy (calling, em_atendimento).
  */
 export function nextBrokerFromInverseTop(brokers: Broker[], excludeIds: Set<string>): Broker | undefined {
-  const available = brokers
-    .filter((b) => !b.is_external_partner && b.presence_status === 'presente' && b.attendance_status === 'livre' && !excludeIds.has(b.id))
-    .sort((a, b) => {
-      const aOrder = a.sorteio_order ?? 999_999;
-      const bOrder = b.sorteio_order ?? 999_999;
-      return bOrder - aOrder;
-    });
-  return available[0];
+  const present = brokers.filter(
+    (b) => !b.is_external_partner && b.presence_status === 'presente' && !excludeIds.has(b.id),
+  );
+
+  // Inverse order: on-time brokers descending (mirror of direct), late at bottom ascending
+  const onTime = present
+    .filter((b) => !isLateForSort(b.arrived_at, b.shift ?? 'manha'))
+    .sort((a, b) => (b.sorteio_order ?? 999_999) - (a.sorteio_order ?? 999_999));
+
+  const late = present
+    .filter((b) => isLateForSort(b.arrived_at, b.shift ?? 'manha'))
+    .sort((a, b) => (a.sorteio_order ?? 999_999) - (b.sorteio_order ?? 999_999));
+
+  const inverseOrder = [...onTime, ...late];
+
+  // Agency turn: determined by the top of the inverse (sorteio position, regardless of Livre)
+  const topBroker = inverseOrder[0];
+  if (!topBroker) return undefined;
+  const targetAgency = topBroker.agency;
+
+  // Find first Livre broker from that agency
+  const sameAgency = inverseOrder.find(
+    (b) => b.agency === targetAgency && b.attendance_status === 'livre',
+  );
+  if (sameAgency) return sameAgency;
+
+  // Caos: no Livre from that agency → transbord to the other
+  const otherAgency: Agency = targetAgency === 'Viva Imóveis' ? 'Casa Nobre' : 'Viva Imóveis';
+  return inverseOrder.find(
+    (b) => b.agency === otherAgency && b.attendance_status === 'livre',
+  );
 }
 
 export function nextBrokerFromInverseQueue(brokers: Broker[], sortedQueue: QueueEntry[]): Broker | undefined {

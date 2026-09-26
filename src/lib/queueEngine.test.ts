@@ -15,6 +15,7 @@ import {
   interleaveQueue,
   SORTEIO_MANHA,
   SORTEIO_TARDE,
+  ATENDIMENTO_MANHA_START,
   type SorteioResult,
 } from './queueEngine';
 import type { Broker, Agency, QueueEntry, Visit, QueueType, Shift } from './supabase';
@@ -101,6 +102,9 @@ const nobreBrokers: Broker[] = [
 ];
 
 const allBrokers = [...vivaBrokers, ...nobreBrokers];
+
+// Post-sorteio dispatch time: after 09:00h when the roleta takes command
+const POST_SORTEIO_TIME = ATENDIMENTO_MANHA_START + 10 * 60; // 09:10:00
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
@@ -192,28 +196,35 @@ describe('Pre-Sorteio Arrival Order (Rule 1 — before 08:46h)', () => {
 });
 
 describe('Pós-Sorteio Intercalation (Rule 3)', () => {
-  it('Vez Geral: scans top-to-bottom for first Livre broker (sorteio_order already encodes intercalation)', () => {
-    // sorteio_order: v1=1, n1=2, v2=3, n2=4, v3=5, n3=6, v4=7, n4=8, v5=9, n5=10
-    // First available = v1 (sorteio_order 1)
-    const result = dispatchBroker(allBrokers, 'geral', SORTEIO_MANHA, new Set(), 'Viva Imóveis', null);
-    expect(result.broker?.id).toBe('v1');
-    expect(result.broker?.agency).toBe('Viva Imóveis');
+  it('Vez Geral: respects agency turn — next agency\'s first Livre broker is picked', () => {
+    // lastCalledAgency='Viva Imóveis' → next is Casa Nobre → n1 (sorteio_order 2)
+    const result = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, new Set(), 'Viva Imóveis', null);
+    expect(result.broker?.id).toBe('n1');
+    expect(result.broker?.agency).toBe('Casa Nobre');
 
-    // lastCalledAgency is now ignored — scan is always top-to-bottom
-    const result2 = dispatchBroker(allBrokers, 'geral', SORTEIO_MANHA, new Set(), 'Casa Nobre', null);
+    // lastCalledAgency='Casa Nobre' → next is Viva Imóveis → v1 (sorteio_order 1)
+    const result2 = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, new Set(), 'Casa Nobre', null);
     expect(result2.broker?.id).toBe('v1');
+    expect(result2.broker?.agency).toBe('Viva Imóveis');
   });
 
-  it('Decorado: uses inverse sorteio (last broker of general queue)', () => {
-    const result = dispatchBroker(allBrokers, 'decorado', SORTEIO_MANHA, new Set(), null, null);
-    // Highest sorteio_order = 10 (n5)
+  it('Vez Geral with no lastCalledAgency: sorteio top determines starting agency', () => {
+    // sorteio_order 1 = v1 (Viva) → Viva goes first
+    const result = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, new Set(), null, null);
+    expect(result.broker?.id).toBe('v1');
+    expect(result.broker?.agency).toBe('Viva Imóveis');
+  });
+
+  it('Decorado: uses inverse sorteio — top of inverse queue by agency turn', () => {
+    const result = dispatchBroker(allBrokers, 'decorado', POST_SORTEIO_TIME, new Set(), null, null);
+    // Inverse top = highest sorteio_order = n5 (10, Casa Nobre) → n5 is Livre
     expect(result.broker?.id).toBe('n5');
   });
 
-  it('Excludes busy brokers — next available Livre is picked', () => {
+  it('Excludes busy brokers — next available Livre from same agency is picked', () => {
     const busy = new Set(['v1', 'n1']);
-    const result = dispatchBroker(allBrokers, 'geral', SORTEIO_MANHA, busy, 'Casa Nobre', null);
-    // v1(1) and n1(2) busy → next is v2 (sorteio_order 3)
+    // lastCalledAgency='Casa Nobre' → next is Viva → v1 busy → v2 (sorteio_order 3)
+    const result = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, busy, 'Casa Nobre', null);
     expect(result.broker?.agency).toBe('Viva Imóveis');
     expect(result.broker?.id).toBe('v2');
   });
@@ -263,7 +274,7 @@ describe('Hierarchical Transbordo for Indicação (Rule 2)', () => {
   });
 
   it('dispatchBroker with referredBrokerId uses transbordo', () => {
-    const result = dispatchBroker(allBrokers, 'geral', SORTEIO_MANHA, new Set(), null, 'v1');
+    const result = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, new Set(), null, 'v1');
     expect(result.broker?.id).toBe('v1');
     expect(result.consumesVez).toBe(false);
   });
@@ -273,27 +284,27 @@ describe('Dynamic Queue Advancement (Rule 4)', () => {
   it('Multiple clients can be dispatched simultaneously — each gets next available', () => {
     const exclude = new Set<string>();
 
-    // Client 1 → top of geral
-    const r1 = dispatchBroker(allBrokers, 'geral', SORTEIO_MANHA, exclude, null, null);
+    // Client 1 → top of geral (sorteio start = Viva)
+    const r1 = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, exclude, null, null);
     expect(r1.broker).toBeDefined();
     exclude.add(r1.broker!.id);
 
-    // Client 2 → next available (different broker, even though client 1 is still in TV timer)
-    const r2 = dispatchBroker(allBrokers, 'geral', SORTEIO_MANHA, exclude, r1.agency, null);
+    // Client 2 → next agency turn (Nobre)
+    const r2 = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, exclude, r1.agency, null);
     expect(r2.broker).toBeDefined();
     expect(r2.broker?.id).not.toBe(r1.broker?.id);
     exclude.add(r2.broker!.id);
 
-    // Client 3 → next available
-    const r3 = dispatchBroker(allBrokers, 'geral', SORTEIO_MANHA, exclude, r2.agency, null);
+    // Client 3 → next agency turn (Viva)
+    const r3 = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, exclude, r2.agency, null);
     expect(r3.broker).toBeDefined();
     expect(r3.broker?.id).not.toBe(r1.broker?.id);
     expect(r3.broker?.id).not.toBe(r2.broker?.id);
   });
 
   it('Decorado and Geral use independent queues — same broker can be top of both', () => {
-    const geralTop = dispatchBroker(allBrokers, 'geral', SORTEIO_MANHA, new Set(), null, null);
-    const decoradoTop = dispatchBroker(allBrokers, 'decorado', SORTEIO_MANHA, new Set(), null, null);
+    const geralTop = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, new Set(), null, null);
+    const decoradoTop = dispatchBroker(allBrokers, 'decorado', POST_SORTEIO_TIME, new Set(), null, null);
 
     // Geral top = lowest sorteio_order (1 = v1), Decorado top = highest (10 = n5)
     expect(geralTop.broker?.id).toBe('v1');
@@ -302,8 +313,8 @@ describe('Dynamic Queue Advancement (Rule 4)', () => {
 
   it('3 strikes: after 3 failed calls, broker is excluded and next Livre is called', () => {
     const busy = new Set<string>(['v1']); // v1 was called 3 times and is now paused
-    // v1(1) excluded → next Livre is n1 (sorteio_order 2)
-    const result = dispatchBroker(allBrokers, 'geral', SORTEIO_MANHA, busy, 'Viva Imóveis', null);
+    // lastCalledAgency='Viva' → next is Nobre → n1 (sorteio_order 2)
+    const result = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, busy, 'Viva Imóveis', null);
     expect(result.broker?.id).toBe('n1');
     expect(result.broker?.agency).toBe('Casa Nobre');
   });
@@ -316,11 +327,11 @@ describe('Batch Test: 20+ Clients (Rule 5 + Intercalation)', () => {
     let lastAgency: Agency | null = null;
 
     for (let i = 0; i < 25; i++) {
-      const result = dispatchBroker(allBrokers, 'geral', SORTEIO_MANHA, exclude, lastAgency, null);
+      const result = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, exclude, lastAgency, null);
       if (!result.broker) {
         // All 10 brokers have served — reset exclusion (simulating reentry cycle)
         exclude.clear();
-        const retry = dispatchBroker(allBrokers, 'geral', SORTEIO_MANHA, exclude, lastAgency, null);
+        const retry = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, exclude, lastAgency, null);
         expect(retry.broker).toBeDefined();
         dispatched.push(retry.broker!.id);
         exclude.add(retry.broker!.id);
@@ -344,7 +355,7 @@ describe('Batch Test: 20+ Clients (Rule 5 + Intercalation)', () => {
     let lastAgency: Agency | null = null;
 
     for (let i = 0; i < 10; i++) {
-      const result = dispatchBroker(allBrokers, 'geral', SORTEIO_MANHA, exclude, lastAgency, null);
+      const result = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, exclude, lastAgency, null);
       if (!result.broker) break;
       agencies.push(result.agency);
       exclude.add(result.broker!.id);
@@ -362,7 +373,7 @@ describe('Batch Test: 20+ Clients (Rule 5 + Intercalation)', () => {
     const order: string[] = [];
 
     for (let i = 0; i < 10; i++) {
-      const result = dispatchBroker(allBrokers, 'decorado', SORTEIO_MANHA, exclude, null, null);
+      const result = dispatchBroker(allBrokers, 'decorado', POST_SORTEIO_TIME, exclude, null, null);
       if (!result.broker) break;
       order.push(result.broker!.id);
       exclude.add(result.broker!.id);
@@ -471,7 +482,7 @@ describe('Dynamic Return Rule (Rule 3 — Término de Atendimento)', () => {
 
 describe('Parceria (Rule 3)', () => {
   it('parceria dispatches to no broker (gerente de parcerias handles it)', () => {
-    const result = dispatchBroker(allBrokers, 'parceria', SORTEIO_MANHA, new Set(), null, null);
+    const result = dispatchBroker(allBrokers, 'parceria', POST_SORTEIO_TIME, new Set(), null, null);
     expect(result.broker).toBeUndefined();
     expect(result.agency).toBe('Externo');
     expect(result.consumesVez).toBe(false);
