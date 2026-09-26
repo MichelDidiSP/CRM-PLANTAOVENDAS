@@ -325,8 +325,12 @@ export function reverseInterleaveQueue(entries: QueueEntry[], brokers: Broker[])
   const onTimeWaiting = waiting.filter((e) => !e.broker_id || !lateIds.has(e.broker_id));
   const lateWaiting = waiting.filter((e) => e.broker_id && lateIds.has(e.broker_id));
 
+  // Invert the pure sorteio array, then push late brokers at the absolute bottom
   const reversedOnTime = [...onTimeWaiting].reverse();
-  return [...reversedOnTime, ...lateWaiting, ...reentries];
+  const result: QueueEntry[] = [...reversedOnTime];
+  result.push(...lateWaiting);
+  result.push(...reentries);
+  return result;
 }
 
 const PRIORITY_REASONS: VisitReason[] = ['Retorno', 'Indicação'];
@@ -587,18 +591,19 @@ export function nextBrokerFromInverseTop(brokers: Broker[], excludeIds: Set<stri
     (b) => !b.is_external_partner && b.presence_status === 'presente' && !isApenasIndicacao(b) && !excludeIds.has(b.id),
   );
 
-  // Inverse order: on-time brokers descending (mirror of direct), late at bottom ascending
-  const onTime = present
+  // Step 1: take on-time brokers in their direct sorteio order (ascending)
+  const onTimeDirect = present
     .filter((b) => !isLateForSort(b.arrived_at, b.shift ?? 'manha'))
-    .sort((a, b) => (b.sorteio_order ?? 999_999) - (a.sorteio_order ?? 999_999));
-
-  const late = present
-    .filter((b) => isLateForSort(b.arrived_at, b.shift ?? 'manha'))
     .sort((a, b) => (a.sorteio_order ?? 999_999) - (b.sorteio_order ?? 999_999));
 
-  const inverseOrder = [...onTime, ...late];
+  // Step 2: reverse the sorteio array (not sort descending) and renumber 1, 2, 3...
+  const inverseOrder: Broker[] = [...onTimeDirect].reverse();
 
-  // Agency turn: determined by the top of the inverse (sorteio position, regardless of Livre)
+  // Step 3: push late brokers at the absolute bottom via .push()
+  const late = present.filter((b) => isLateForSort(b.arrived_at, b.shift ?? 'manha'));
+  for (const b of late) inverseOrder.push(b);
+
+  // Agency turn: determined by the top of the inverse
   const topBroker = inverseOrder[0];
   if (!topBroker) return undefined;
   const targetAgency = topBroker.agency;
