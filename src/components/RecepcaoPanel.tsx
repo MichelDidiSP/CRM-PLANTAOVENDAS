@@ -208,7 +208,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
     if (isIndicacaoPresente) {
       // Rule 5: goes directly to the referred broker, does NOT consume their vez
       const referred = brokers.find((b) => b.id === quickBrokerId);
-      if (referred && referred.presence_status === 'presente' && referred.attendance_status === 'livre') {
+      if (referred && referred.presence_status === 'presente' && (referred.attendance_status === 'livre' || referred.attendance_status === 'apenas_indicacao')) {
         assignedBrokerId = referred.id;
       }
     } else if (isIndicacaoAusente) {
@@ -275,6 +275,10 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
       await supabase.from('queue_entries').delete().in('visit_id', visitIds);
       await supabase.from('visits').delete().in('id', visitIds);
     }
+    if (visits.length <= discardCount) {
+      quickCounterRef.current = 0;
+      try { localStorage.setItem('global_client_counter', '0'); } catch { /* ignore */ }
+    }
     setDiscarding(false);
   }
 
@@ -325,7 +329,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
                   <option value="">Selecione um corretor…</option>
                   {(isIndicacaoPresente ? presentBrokers : allInternalBrokers.filter((b) => b.presence_status === 'ausente')).map((b) => (
                     <option key={b.id} value={b.id}>
-                      {b.operational_name} ({b.agency}) {b.presence_status === 'presente' ? '· Presente' : '· Ausente'}
+                      {b.operational_name} ({b.agency}) {b.presence_status === 'presente' ? '· Presente' : '· Ausente'}{b.attendance_status === 'apenas_indicacao' ? ' · Apenas Indicação' : ''}
                     </option>
                   ))}
                 </select>

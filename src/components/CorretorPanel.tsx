@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { UserCheck, UserX, Clock, Coffee, Table2, Chrome as Home, CircleCheck as CheckCircle, Plus, Trash2, ExternalLink, Users as Users2, Sun, Moon, Bookmark } from 'lucide-react';
 import { supabase, type Broker, type BrokerPresence, type AttendanceStatus, type Agency, type Shift } from '@/lib/supabase';
-import { AGENCIES, isLateForSort } from '@/lib/queueEngine';
+import { AGENCIES, isLateForSort, isBeyondBarrier } from '@/lib/queueEngine';
 import { useSim } from '@/lib/simContext';
 
 type Props = { brokers: Broker[] };
@@ -30,11 +30,16 @@ export default function CorretorPanel({ brokers }: Props) {
     if (status === 'presente' && !broker.arrived_at) {
       updates.arrived_at = now;
       updates.shift = currentShift;
-      const isLate = isLateForSort(now, currentShift);
-      if (isLate) {
-        const sameShift = internalBrokers.filter((b) => b.shift === currentShift && b.sorteio_order != null);
-        const maxOrder = sameShift.length > 0 ? Math.max(...sameShift.map((b) => b.sorteio_order ?? 0)) : 0;
-        updates.sorteio_order = maxOrder + 1;
+      const simSec = getCurrentTime().getHours() * 3600 + getCurrentTime().getMinutes() * 60 + getCurrentTime().getSeconds();
+      if (isBeyondBarrier(simSec, currentShift)) {
+        updates.attendance_status = 'apenas_indicacao';
+      } else {
+        const isLate = isLateForSort(now, currentShift);
+        if (isLate) {
+          const sameShift = internalBrokers.filter((b) => b.shift === currentShift && b.sorteio_order != null);
+          const maxOrder = sameShift.length > 0 ? Math.max(...sameShift.map((b) => b.sorteio_order ?? 0)) : 0;
+          updates.sorteio_order = maxOrder + 1;
+        }
       }
     }
     await supabase.from('brokers').update(updates).eq('id', broker.id);
@@ -145,6 +150,7 @@ export default function CorretorPanel({ brokers }: Props) {
                     <div className="flex items-center gap-2 mt-1 flex-wrap">
                       <span className={`text-xs px-2 py-0.5 rounded-full ${broker.agency === 'Viva Imóveis' ? 'bg-amber-500/15 text-amber-400' : 'bg-sky-500/15 text-sky-400'}`}>{broker.agency}</span>
                       {late && <span className="text-xs px-2 py-0.5 rounded-full bg-red-500/15 text-red-400">Atrasado</span>}
+                      {broker.attendance_status === 'apenas_indicacao' && <span className="text-xs px-2 py-0.5 rounded-full bg-purple-500/15 text-purple-400">Apenas Indicação</span>}
                       {broker.afternoon_reserved && <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-400">Vaga reservada tarde</span>}
                       {broker.shift && <span className={`text-xs px-2 py-0.5 rounded-full ${broker.shift === 'manha' ? 'bg-amber-500/15 text-amber-400' : 'bg-indigo-500/15 text-indigo-400'}`}>{broker.shift === 'manha' ? 'Manhã' : 'Tarde'}</span>}
                     </div>

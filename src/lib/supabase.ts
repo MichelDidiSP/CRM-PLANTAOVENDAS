@@ -46,7 +46,7 @@ export const dbReady = probeReal().then((ok) => {
 export type Agency = 'Viva Imóveis' | 'Casa Nobre' | 'Externo';
 export type VisitReason = 'Primeira visita' | 'Retorno' | 'Indicação' | 'Parceria' | 'Visita ao Decorado' | 'Indicação Presente' | 'Indicação Ausente' | 'Indicação Imobiliária';
 export type BrokerPresence = 'ausente' | 'presente' | 'pausa';
-export type AttendanceStatus = 'livre' | 'em_mesa' | 'decorado' | 'encerrado' | 'parceiro';
+export type AttendanceStatus = 'livre' | 'em_mesa' | 'decorado' | 'encerrado' | 'parceiro' | 'apenas_indicacao';
 export type QueueType = 'geral' | 'decorado' | 'parceria';
 export type Shift = 'manha' | 'tarde';
 

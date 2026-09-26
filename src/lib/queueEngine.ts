@@ -6,6 +6,8 @@ export const SORTEIO_MANHA = 8 * 3600 + 46 * 60;  // 08:46:00
 export const SORTEIO_TARDE = 13 * 3600 + 46 * 60; // 13:46:00
 export const ATENDIMENTO_MANHA_START = 9 * 3600;       // 09:00:00 — roleta assumes command
 export const ATENDIMENTO_TARDE_START = 14 * 3600;      // 14:00:00
+export const BARRIER_MANHA = 9 * 3600 + 30 * 60;        // 09:30:00 — after this, check-in = Apenas Indicação
+export const BARRIER_TARDE = 14 * 3600 + 30 * 60;       // 14:30:00
 
 export function secondsSinceMidnight(date: Date): number {
   return date.getHours() * 3600 + date.getMinutes() * 60 + date.getSeconds();
@@ -16,6 +18,15 @@ export function isLateForSort(arrivedAt: string | null, shift: Shift = 'manha'):
   const arrived = new Date(arrivedAt);
   const limit = shift === 'manha' ? LATE_LIMIT_MANHA : LATE_LIMIT_TARDE;
   return secondsSinceMidnight(arrived) > limit;
+}
+
+export function isBeyondBarrier(simSeconds: number, shift: Shift = 'manha'): boolean {
+  const barrier = shift === 'manha' ? BARRIER_MANHA : BARRIER_TARDE;
+  return simSeconds >= barrier;
+}
+
+export function isApenasIndicacao(broker: Broker): boolean {
+  return broker.attendance_status === 'apenas_indicacao';
 }
 
 export function formatTime(seconds: number): string {
@@ -301,7 +312,21 @@ export function interleaveQueue(entries: QueueEntry[], brokers: Broker[], lastCa
 }
 
 export function reverseInterleaveQueue(entries: QueueEntry[], brokers: Broker[]): QueueEntry[] {
-  return [...interleaveQueue(entries, brokers)].reverse();
+  const interleaved = interleaveQueue(entries, brokers);
+  const waiting = interleaved.filter((e) => e.queue_status === 'aguardando');
+  const reentries = interleaved.filter((e) => e.queue_status === 'ausente' && e.reentry_at);
+
+  const lateIds = new Set(
+    brokers
+      .filter((b) => isLateForSort(b.arrived_at, b.shift ?? 'manha'))
+      .map((b) => b.id),
+  );
+
+  const onTimeWaiting = waiting.filter((e) => !e.broker_id || !lateIds.has(e.broker_id));
+  const lateWaiting = waiting.filter((e) => e.broker_id && lateIds.has(e.broker_id));
+
+  const reversedOnTime = [...onTimeWaiting].reverse();
+  return [...reversedOnTime, ...lateWaiting, ...reentries];
 }
 
 const PRIORITY_REASONS: VisitReason[] = ['Retorno', 'Indicação'];
@@ -333,7 +358,7 @@ function sortKey(entries: QueueEntry[], brokers: Broker[], entry: QueueEntry): n
  */
 export function nextBrokerFromAgency(brokers: Broker[], agency: Agency, excludeIds: Set<string>): Broker | undefined {
   const agencyBrokers = brokers
-    .filter((b) => !b.is_external_partner && b.agency === agency && b.presence_status === 'presente' && b.attendance_status === 'livre' && !excludeIds.has(b.id))
+    .filter((b) => !b.is_external_partner && b.agency === agency && b.presence_status === 'presente' && b.attendance_status === 'livre' && !isApenasIndicacao(b) && !excludeIds.has(b.id))
     .sort((a, b) => (a.sorteio_order ?? 999_999) - (b.sorteio_order ?? 999_999));
 
   return agencyBrokers[0];
@@ -396,7 +421,7 @@ export function nextBrokerByArrival(brokers: Broker[], agency: Agency, excludeId
  */
 export function nextBrokerByArrivalAnyAgency(brokers: Broker[], excludeIds: Set<string>): Broker | undefined {
   const available = brokers
-    .filter((b) => !b.is_external_partner && b.presence_status === 'presente' && b.attendance_status === 'livre' && !excludeIds.has(b.id))
+    .filter((b) => !b.is_external_partner && b.presence_status === 'presente' && b.attendance_status === 'livre' && !isApenasIndicacao(b) && !excludeIds.has(b.id))
     .sort((a, b) => {
       const aTime = a.arrived_at ? new Date(a.arrived_at).getTime() : Infinity;
       const bTime = b.arrived_at ? new Date(b.arrived_at).getTime() : Infinity;
@@ -412,7 +437,7 @@ export function nextBrokerByArrivalAnyAgency(brokers: Broker[], excludeIds: Set<
  */
 export function nextBrokerByArrivalInverse(brokers: Broker[], excludeIds: Set<string>): Broker | undefined {
   const available = brokers
-    .filter((b) => !b.is_external_partner && b.presence_status === 'presente' && b.attendance_status === 'livre' && !excludeIds.has(b.id))
+    .filter((b) => !b.is_external_partner && b.presence_status === 'presente' && b.attendance_status === 'livre' && !isApenasIndicacao(b) && !excludeIds.has(b.id))
     .sort((a, b) => {
       const aTime = a.arrived_at ? new Date(a.arrived_at).getTime() : -Infinity;
       const bTime = b.arrived_at ? new Date(b.arrived_at).getTime() : -Infinity;
@@ -429,7 +454,7 @@ export function nextBrokerByArrivalInverse(brokers: Broker[], excludeIds: Set<st
  */
 export function lastBrokerFromAgency(brokers: Broker[], agency: Agency, excludeIds: Set<string>): Broker | undefined {
   const agencyBrokers = brokers
-    .filter((b) => !b.is_external_partner && b.agency === agency && b.presence_status === 'presente' && b.attendance_status === 'livre' && !excludeIds.has(b.id))
+    .filter((b) => !b.is_external_partner && b.agency === agency && b.presence_status === 'presente' && b.attendance_status === 'livre' && !isApenasIndicacao(b) && !excludeIds.has(b.id))
     .sort((a, b) => (b.sorteio_order ?? 0) - (a.sorteio_order ?? 0));
 
   return agencyBrokers[0];
@@ -461,8 +486,8 @@ export function resolveIndicacaoBroker(
     return { broker: undefined, consumesVez: true, source: 'last_of_agency' };
   }
 
-  // Step 1: Named broker is present and free
-  if (referred.presence_status === 'presente' && referred.attendance_status === 'livre' && !excludeIds.has(referred.id)) {
+  // Step 1: Named broker is present and free (apenas_indicacao brokers CAN receive their own indicação)
+  if (referred.presence_status === 'presente' && (referred.attendance_status === 'livre' || referred.attendance_status === 'apenas_indicacao') && !excludeIds.has(referred.id)) {
     return { broker: referred, consumesVez: false, source: 'named' };
   }
 
@@ -559,7 +584,7 @@ export async function moveBrokerToEndOfQueue(brokerId: string, brokers: Broker[]
  */
 export function nextBrokerFromInverseTop(brokers: Broker[], excludeIds: Set<string>): Broker | undefined {
   const present = brokers.filter(
-    (b) => !b.is_external_partner && b.presence_status === 'presente' && !excludeIds.has(b.id),
+    (b) => !b.is_external_partner && b.presence_status === 'presente' && !isApenasIndicacao(b) && !excludeIds.has(b.id),
   );
 
   // Inverse order: on-time brokers descending (mirror of direct), late at bottom ascending
@@ -596,13 +621,13 @@ export function nextBrokerFromInverseQueue(brokers: Broker[], sortedQueue: Queue
   for (const entry of reversed) {
     if (entry.broker_id) {
       const broker = brokers.find((b) => b.id === entry.broker_id);
-      if (broker && !broker.is_external_partner && broker.presence_status === 'presente' && broker.attendance_status === 'livre') {
+      if (broker && !broker.is_external_partner && broker.presence_status === 'presente' && broker.attendance_status === 'livre' && !isApenasIndicacao(broker)) {
         return broker;
       }
     }
   }
   return brokers.find(
-    (b) => !b.is_external_partner && b.presence_status === 'presente' && b.attendance_status === 'livre',
+    (b) => !b.is_external_partner && b.presence_status === 'presente' && b.attendance_status === 'livre' && !isApenasIndicacao(b),
   );
 }
 
