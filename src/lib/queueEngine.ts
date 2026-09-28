@@ -166,11 +166,26 @@ export async function executeSorteio(brokers: Broker[], simSeconds: number, shif
   const finalOrder = [...interleaved, ...lateInterleaved];
   const sessionId = `sorteio_${shift}_${Date.now()}`;
 
-  for (let i = 0; i < finalOrder.length; i++) {
+  // Direct queue: sorteio_order = 1, 2, 3... (intercalated order)
+  // Inverse queue: inverse_order = mirrored from direct, then independently numbered
+  // The inverse queue is the direct queue reversed and renumbered 1, 2, 3...
+  // Late brokers are pushed to the END of BOTH queues via .push()
+  const directOrder = [...interleaved, ...lateInterleaved];
+  const inverseOrder = [...interleaved].reverse();
+  // Late brokers go to the end of the inverse queue too, via .push()
+  for (const b of lateInterleaved) inverseOrder.push(b);
+
+  for (let i = 0; i < directOrder.length; i++) {
     await supabase
       .from('brokers')
       .update({ sorteio_order: i + 1, shift })
-      .eq('id', finalOrder[i].id);
+      .eq('id', directOrder[i].id);
+  }
+  for (let i = 0; i < inverseOrder.length; i++) {
+    await supabase
+      .from('brokers')
+      .update({ inverse_order: i + 1 })
+      .eq('id', inverseOrder[i].id);
   }
 
   await supabase.from('plantao_sessions').insert({
@@ -208,6 +223,7 @@ export async function reiniciarPlantao(brokers: Broker[]): Promise<void> {
       .from('brokers')
       .update({
         sorteio_order: null,
+        inverse_order: null,
         attendance_status: 'livre',
         presence_status: 'ausente',
         arrived_at: null,
@@ -268,6 +284,7 @@ export async function transitionToAfternoon(brokers: Broker[]): Promise<void> {
           attendance_status: 'livre',
           arrived_at: null,
           sorteio_order: null,
+          inverse_order: null,
           shift: null,
           afternoon_reserved: false,
           last_status_update: new Date().toISOString(),
@@ -312,24 +329,35 @@ export function interleaveQueue(entries: QueueEntry[], brokers: Broker[], lastCa
 }
 
 export function reverseInterleaveQueue(entries: QueueEntry[], brokers: Broker[]): QueueEntry[] {
-  const interleaved = interleaveQueue(entries, brokers);
-  const waiting = interleaved.filter((e) => e.queue_status === 'aguardando');
-  const reentries = interleaved.filter((e) => e.queue_status === 'ausente' && e.reentry_at);
+  const waiting = entries.filter((e) => e.queue_type === 'geral' && e.queue_status === 'aguardando');
+  const reentries = entries.filter((e) => e.queue_type === 'geral' && e.queue_status === 'ausente' && e.reentry_at);
 
+  // Sort by inverse_order ascending — the inverse queue has its own independent numbering
+  const sortedReentries = [...reentries].sort(
+    (a, b) => new Date(a.reentry_at!).getTime() - new Date(b.reentry_at!).getTime(),
+  );
+
+  // Separate on-time and late brokers based on inverse_order
   const lateIds = new Set(
     brokers
       .filter((b) => isLateForSort(b.arrived_at, b.shift ?? 'manha'))
       .map((b) => b.id),
   );
 
-  const onTimeWaiting = waiting.filter((e) => !e.broker_id || !lateIds.has(e.broker_id));
-  const lateWaiting = waiting.filter((e) => e.broker_id && lateIds.has(e.broker_id));
+  const onTime = waiting
+    .filter((e) => !e.broker_id || !lateIds.has(e.broker_id))
+    .sort((a, b) => {
+      const ba = brokers.find((br) => br.id === a.broker_id);
+      const bb = brokers.find((br) => br.id === b.broker_id);
+      return (ba?.inverse_order ?? 999_999) - (bb?.inverse_order ?? 999_999);
+    });
 
-  // Invert the pure sorteio array, then push late brokers at the absolute bottom
-  const reversedOnTime = [...onTimeWaiting].reverse();
-  const result: QueueEntry[] = [...reversedOnTime];
-  result.push(...lateWaiting);
-  result.push(...reentries);
+  const late = waiting.filter((e) => e.broker_id && lateIds.has(e.broker_id));
+
+  // On-time brokers sorted by inverse_order ascending, then late at the end via .push()
+  const result: QueueEntry[] = [...onTime];
+  result.push(...late);
+  result.push(...sortedReentries);
   return result;
 }
 
@@ -465,6 +493,33 @@ export function lastBrokerFromAgency(brokers: Broker[], agency: Agency, excludeI
 }
 
 /**
+ * Late check-in push: when a broker checks in after the sorteio (08:46h),
+ * they are appended to the END of both queues independently via .push():
+ * - Direct queue: sorteio_order = max(sorteio_order across ALL brokers) + 1
+ * - Inverse queue: inverse_order = max(inverse_order across ALL brokers) + 1
+ *
+ * Both queues have independent numbering and are decoupled after the sorteio.
+ */
+export async function pushLateBrokerToQueues(brokerId: string, brokers: Broker[]): Promise<void> {
+  const broker = brokers.find((b) => b.id === brokerId);
+  if (!broker) return;
+
+  const allDirect = brokers.filter((b) => !b.is_external_partner && b.sorteio_order != null);
+  const maxDirect = allDirect.length > 0 ? Math.max(...allDirect.map((b) => b.sorteio_order ?? 0)) : 0;
+
+  const allInverse = brokers.filter((b) => !b.is_external_partner && b.inverse_order != null);
+  const maxInverse = allInverse.length > 0 ? Math.max(...allInverse.map((b) => b.inverse_order ?? 0)) : 0;
+
+  await supabase
+    .from('brokers')
+    .update({
+      sorteio_order: maxDirect + 1,
+      inverse_order: maxInverse + 1,
+    })
+    .eq('id', brokerId);
+}
+
+/**
  * Hierarchical Transbordo for Indicação (Rule 2):
  * 1. Try the named broker if present and free.
  * 2. If absent, try someone from the SAME AGENCY who is present and free.
@@ -564,26 +619,40 @@ export function dispatchBroker(
 }
 
 /**
- * Move broker to end of queue: assigns the highest sorteio_order + 1 among
- * same-agency brokers, effectively sending them to the back of their agency's
- * internal queue. This makes the fila walk forward.
+ * Move broker to end of BOTH queues independently:
+ * - Direct queue: sorteio_order = max(sorteio_order) + 1 among same-agency brokers
+ * - Inverse queue: inverse_order = max(inverse_order) + 1 among ALL brokers (both agencies)
+ *
+ * The two queues are decoupled — each walks forward at its own pace.
  */
 export async function moveBrokerToEndOfQueue(brokerId: string, brokers: Broker[]): Promise<void> {
   const broker = brokers.find((b) => b.id === brokerId);
   if (!broker) return;
-  const sameAgency = brokers.filter((b) => !b.is_external_partner && b.agency === broker.agency && b.sorteio_order != null);
-  const maxOrder = sameAgency.length > 0 ? Math.max(...sameAgency.map((b) => b.sorteio_order ?? 0)) : 0;
+
+  // Direct queue: move to end within the same agency
+  const sameAgencyDirect = brokers.filter((b) => !b.is_external_partner && b.agency === broker.agency && b.sorteio_order != null);
+  const maxDirect = sameAgencyDirect.length > 0 ? Math.max(...sameAgencyDirect.map((b) => b.sorteio_order ?? 0)) : 0;
+
+  // Inverse queue: move to end across ALL brokers (independent numbering)
+  const allInverse = brokers.filter((b) => !b.is_external_partner && b.inverse_order != null);
+  const maxInverse = allInverse.length > 0 ? Math.max(...allInverse.map((b) => b.inverse_order ?? 0)) : 0;
+
   await supabase
     .from('brokers')
-    .update({ sorteio_order: maxOrder + 1, last_status_update: new Date().toISOString() })
+    .update({
+      sorteio_order: maxDirect + 1,
+      inverse_order: maxInverse + 1,
+      last_status_update: new Date().toISOString(),
+    })
     .eq('id', brokerId);
 }
 
 /**
  * Visita ao Decorado: picks the first available broker from the TOP of the
- * INVERSE queue (which is the LAST broker of the general queue by sorteio_order).
- * The inverse queue runs in the opposite direction — the last broker in the
- * general queue is the first to be called for decorado.
+ * INVERSE queue. The inverse queue has its own independent numbering
+ * (inverse_order: 1, 2, 3...) assigned at sorteio time and maintained
+ * independently from the direct queue.
+ * Late brokers are at the end (highest inverse_order).
  * Excludes brokers currently busy (calling, em_atendimento).
  */
 export function nextBrokerFromInverseTop(brokers: Broker[], excludeIds: Set<string>): Broker | undefined {
@@ -591,32 +660,31 @@ export function nextBrokerFromInverseTop(brokers: Broker[], excludeIds: Set<stri
     (b) => !b.is_external_partner && b.presence_status === 'presente' && !isApenasIndicacao(b) && !excludeIds.has(b.id),
   );
 
-  // Step 1: take on-time brokers in their direct sorteio order (ascending)
-  const onTimeDirect = present
-    .filter((b) => !isLateForSort(b.arrived_at, b.shift ?? 'manha'))
-    .sort((a, b) => (a.sorteio_order ?? 999_999) - (b.sorteio_order ?? 999_999));
+  // Sort by inverse_order ascending — the inverse queue's own independent numbering
+  const sorted = present
+    .filter((b) => b.inverse_order != null)
+    .sort((a, b) => (a.inverse_order ?? 999_999) - (b.inverse_order ?? 999_999));
 
-  // Step 2: reverse the sorteio array (not sort descending) and renumber 1, 2, 3...
-  const inverseOrder: Broker[] = [...onTimeDirect].reverse();
+  // Brokers without inverse_order (e.g. late check-ins that haven't been pushed yet)
+  // go to the absolute end
+  const noOrder = present.filter((b) => b.inverse_order == null);
+  const fullQueue: Broker[] = [...sorted];
+  for (const b of noOrder) fullQueue.push(b);
 
-  // Step 3: push late brokers at the absolute bottom via .push()
-  const late = present.filter((b) => isLateForSort(b.arrived_at, b.shift ?? 'manha'));
-  for (const b of late) inverseOrder.push(b);
-
-  // Agency turn: determined by the top of the inverse
-  const topBroker = inverseOrder[0];
+  // Agency turn: determined by the top of the inverse queue
+  const topBroker = fullQueue[0];
   if (!topBroker) return undefined;
   const targetAgency = topBroker.agency;
 
   // Find first Livre broker from that agency
-  const sameAgency = inverseOrder.find(
+  const sameAgency = fullQueue.find(
     (b) => b.agency === targetAgency && b.attendance_status === 'livre',
   );
   if (sameAgency) return sameAgency;
 
   // Caos: no Livre from that agency → transbord to the other
   const otherAgency: Agency = targetAgency === 'Viva Imóveis' ? 'Casa Nobre' : 'Viva Imóveis';
-  return inverseOrder.find(
+  return fullQueue.find(
     (b) => b.agency === otherAgency && b.attendance_status === 'livre',
   );
 }

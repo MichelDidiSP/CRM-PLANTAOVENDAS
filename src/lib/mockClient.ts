@@ -21,6 +21,7 @@ function createSeedData(): Record<string, Row[]> {
     is_external_partner: external,
     external_company: company,
     sorteio_order: null,
+    inverse_order: null,
     shift: null,
     afternoon_reserved: false,
     created_at: now,

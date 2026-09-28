@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { UserCheck, UserX, Clock, Coffee, Table2, Chrome as Home, CircleCheck as CheckCircle, Plus, Trash2, ExternalLink, Users as Users2, Sun, Moon, Bookmark } from 'lucide-react';
 import { supabase, type Broker, type BrokerPresence, type AttendanceStatus, type Agency, type Shift } from '@/lib/supabase';
-import { AGENCIES, isLateForSort, isBeyondBarrier } from '@/lib/queueEngine';
+import { AGENCIES, isLateForSort, isBeyondBarrier, pushLateBrokerToQueues } from '@/lib/queueEngine';
 import { useSim } from '@/lib/simContext';
 
 type Props = { brokers: Broker[] };
@@ -33,16 +33,20 @@ export default function CorretorPanel({ brokers }: Props) {
       const simSec = getCurrentTime().getHours() * 3600 + getCurrentTime().getMinutes() * 60 + getCurrentTime().getSeconds();
       if (isBeyondBarrier(simSec, currentShift)) {
         updates.attendance_status = 'apenas_indicacao';
-      } else {
-        const isLate = isLateForSort(now, currentShift);
-        if (isLate) {
-          const sameShift = internalBrokers.filter((b) => b.shift === currentShift && b.sorteio_order != null);
-          const maxOrder = sameShift.length > 0 ? Math.max(...sameShift.map((b) => b.sorteio_order ?? 0)) : 0;
-          updates.sorteio_order = maxOrder + 1;
-        }
       }
+      // Late check-in after sorteio: push to the END of both queues independently
+      // (handled after the initial update so we have the full broker list)
     }
     await supabase.from('brokers').update(updates).eq('id', broker.id);
+
+    // If this was a late check-in (after sorteio time), push to both queues
+    if (status === 'presente' && !broker.arrived_at) {
+      const simSec = getCurrentTime().getHours() * 3600 + getCurrentTime().getMinutes() * 60 + getCurrentTime().getSeconds();
+      const isLate = isLateForSort(now, currentShift);
+      if (isLate && !isBeyondBarrier(simSec, currentShift)) {
+        await pushLateBrokerToQueues(broker.id, internalBrokers);
+      }
+    }
   }
 
   async function updateAttendance(broker: Broker, status: AttendanceStatus) {

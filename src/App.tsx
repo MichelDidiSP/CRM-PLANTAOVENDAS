@@ -552,7 +552,7 @@ function AuditoriaPanel({ sorteioResult, brokers, queue, attendanceReport }: {
           <div className="space-y-2">
             {[...brokers]
               .filter((b) => !b.is_external_partner && b.presence_status === 'presente')
-              .sort((a, b) => (b.sorteio_order ?? 0) - (a.sorteio_order ?? 0))
+              .sort((a, b) => (a.inverse_order ?? 999_999) - (b.inverse_order ?? 999_999))
               .map((b, i) => {
                 const statusLabel = b.attendance_status === 'em_mesa' ? 'Chamado' : b.attendance_status === 'livre' ? 'Livre' : b.attendance_status === 'decorado' ? 'Em Atendimento' : b.presence_status === 'pausa' ? 'Pausado' : b.attendance_status;
                 const statusColor = b.attendance_status === 'livre' ? 'bg-emerald-500/15 text-emerald-400' : b.attendance_status === 'em_mesa' ? 'bg-amber-500/15 text-amber-400' : b.attendance_status === 'decorado' ? 'bg-sky-500/15 text-sky-400' : b.presence_status === 'pausa' ? 'bg-red-500/15 text-red-400' : 'bg-slate-600/30 text-slate-400';

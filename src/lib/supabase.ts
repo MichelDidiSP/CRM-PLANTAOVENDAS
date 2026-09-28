@@ -65,6 +65,7 @@ export type Broker = {
   is_external_partner: boolean;
   external_company: string | null;
   sorteio_order: number | null;
+  inverse_order: number | null;
   shift: Shift | null;
   afternoon_reserved: boolean;
   created_at: string;
