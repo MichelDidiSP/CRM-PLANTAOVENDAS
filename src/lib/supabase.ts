@@ -1,39 +1,43 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { createMockClient } from './mockClient';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL ?? '';
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY ?? '';
 
-const realClient = createClient(supabaseUrl, supabaseAnonKey, {
-  auth: { persistSession: false },
-});
-const mockClient = createMockClient();
+const hasCredentials = supabaseUrl.length > 0 && supabaseUrl.startsWith('http') && supabaseAnonKey.length > 0;
 
-let usingMock = false;
+const mockClient = createMockClient();
+const realClient: SupabaseClient | null = hasCredentials
+  ? createClient(supabaseUrl, supabaseAnonKey, { auth: { persistSession: false } })
+  : null;
+
+let usingMock = !hasCredentials;
 let probePromise: Promise<boolean> | null = null;
 
 function probeReal(): Promise<boolean> {
   if (probePromise) return probePromise;
+  if (!realClient) {
+    probePromise = Promise.resolve(false);
+    return probePromise;
+  }
   probePromise = new Promise((resolve) => {
     const timeout = setTimeout(() => resolve(false), 4000);
-    realClient
-      .from('brokers')
-      .select('id')
-      .limit(1)
+    Promise.resolve(realClient.from('brokers').select('id').limit(1))
       .then(() => { clearTimeout(timeout); resolve(true); })
       .catch(() => { clearTimeout(timeout); resolve(false); });
   });
   return probePromise;
 }
 
-const handler: ProxyHandler<typeof realClient> = {
+const handler: ProxyHandler<SupabaseClient> = {
   get(_target, prop) {
-    if (usingMock) return (mockClient as any)[prop];
+    if (usingMock || !realClient) return (mockClient as any)[prop];
     return (realClient as any)[prop];
   },
 };
 
-export const supabase = new Proxy(realClient, handler) as typeof realClient;
+const proxyTarget: SupabaseClient = realClient ?? (mockClient as any);
+export const supabase = new Proxy(proxyTarget, handler) as SupabaseClient;
 
 export const dbReady = probeReal().then((ok) => {
   if (!ok) {
