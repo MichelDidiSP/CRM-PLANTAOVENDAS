@@ -49,6 +49,45 @@ export function sanitizePhone(input: string): string {
 export const AGENCIES: Agency[] = ['Viva Imóveis', 'Casa Nobre'];
 export const REASONS: VisitReason[] = ['Primeira visita', 'Retorno', 'Indicação', 'Parceria', 'Visita ao Decorado'];
 
+const ROTATION_KEY = 'plantao_company_rotation_index';
+const DRAW_ORDER_KEY = 'plantao_company_draw_order';
+
+export function getCompanyRotationIndex(): number {
+  try {
+    const stored = localStorage.getItem(ROTATION_KEY);
+    return stored ? parseInt(stored, 10) : 0;
+  } catch { return 0; }
+}
+
+export function setCompanyRotationIndex(index: number): void {
+  try { localStorage.setItem(ROTATION_KEY, String(index)); } catch { /* ignore */ }
+}
+
+export function incrementCompanyRotationIndex(totalCompanies: number): void {
+  const next = (getCompanyRotationIndex() + 1) % totalCompanies;
+  setCompanyRotationIndex(next);
+}
+
+export function getCompanyDrawOrder(): Agency[] {
+  try {
+    const stored = localStorage.getItem(DRAW_ORDER_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch { /* ignore */ }
+  return AGENCIES;
+}
+
+export function setCompanyDrawOrder(order: Agency[]): void {
+  try { localStorage.setItem(DRAW_ORDER_KEY, JSON.stringify(order)); } catch { /* ignore */ }
+}
+
+export function resetCompanyRotation(): void {
+  setCompanyRotationIndex(0);
+  try { localStorage.removeItem(DRAW_ORDER_KEY); } catch { /* ignore */ }
+}
+
 export const QUICK_REASONS: VisitReason[] = ['Primeira visita', 'Retorno', 'Indicação', 'Parceria', 'Visita ao Decorado', 'Indicação Presente', 'Indicação Ausente', 'Indicação Imobiliária'];
 export const QUEUE_TYPES: QueueType[] = ['geral', 'decorado', 'parceria'];
 
@@ -188,6 +227,10 @@ export async function executeSorteio(brokers: Broker[], simSeconds: number, shif
       .eq('id', inverseOrder[i].id);
   }
 
+  const drawOrder: Agency[] = [desempateWinner, desempateWinner === 'Viva Imóveis' ? 'Casa Nobre' : 'Viva Imóveis'];
+  setCompanyDrawOrder(drawOrder);
+  setCompanyRotationIndex(0);
+
   await supabase.from('plantao_sessions').insert({
     id: sessionId,
     status: 'active',
@@ -243,6 +286,8 @@ export async function reiniciarPlantao(brokers: Broker[]): Promise<void> {
     .from('visits')
     .update({ status: 'encerrado' })
     .in('status', ['aguardando', 'aguardando_chamada', 'em_atendimento']);
+
+  resetCompanyRotation();
 }
 
 /**
@@ -292,6 +337,8 @@ export async function transitionToAfternoon(brokers: Broker[]): Promise<void> {
         .eq('id', broker.id);
     }
   }
+
+  resetCompanyRotation();
 }
 
 /**
@@ -397,38 +444,33 @@ export function nextBrokerFromAgency(brokers: Broker[], agency: Agency, excludeI
 }
 
 /**
- * Picks the next broker for the general queue by scanning the FULL intercalated
- * queue top-to-bottom (sorted by sorteio_order ascending) and returning the
- * FIRST broker whose status is strictly 'Livre'.
+ * Picks the next broker for the general queue using the persistent company
+ * rotation pointer. The pointer is stored in LocalStorage and advances
+ * by 1 (mod totalCompanies) after each successful dispatch. This ensures
+ * correct alternation Viva → Nobre → Viva → ... regardless of caller state.
  *
- * The sorteio_order already encodes the intercalation (1=Viva, 2=Nobre, 3=Viva...),
- * so scanning top-to-bottom naturally respects alternation. Brokers with status
- * 'Chamado', 'Em Atendimento', or 'Pausado' are skipped.
+ * If the target agency has 100% of brokers busy, the system transbords to
+ * the other agency WITHOUT advancing the pointer.
  */
 export function nextBrokerForGeneralQueue(
   brokers: Broker[],
-  lastCalledAgency: Agency | null,
+  _lastCalledAgency: Agency | null,
   excludeIds: Set<string>,
 ): { broker: Broker | undefined; agency: Agency } {
-  // Determine which agency's turn it is (opposite of last called, or sorteio start)
-  let nextAgency: Agency;
-  if (lastCalledAgency) {
-    nextAgency = lastCalledAgency === 'Viva Imóveis' ? 'Casa Nobre' : 'Viva Imóveis';
-  } else {
-    const sorted = brokers
-      .filter((b) => !b.is_external_partner && b.sorteio_order != null)
-      .sort((a, b) => (a.sorteio_order ?? 0) - (b.sorteio_order ?? 0));
-    nextAgency = sorted[0]?.agency ?? 'Viva Imóveis';
+  const drawOrder = getCompanyDrawOrder();
+  const totalCompanies = drawOrder.length;
+  const rotationIndex = getCompanyRotationIndex();
+  const targetAgency = drawOrder[rotationIndex] ?? AGENCIES[0];
+
+  const broker = nextBrokerFromAgency(brokers, targetAgency, excludeIds);
+  if (broker) {
+    incrementCompanyRotationIndex(totalCompanies);
+    return { broker, agency: broker.agency };
   }
 
-  // Try the agency whose turn it is — find first Livre broker from that agency
-  const broker = nextBrokerFromAgency(brokers, nextAgency, excludeIds);
-  if (broker) return { broker, agency: broker.agency };
-
-  // Caos: no Livre from that agency → transbord to the other agency
-  const otherAgency: Agency = nextAgency === 'Viva Imóveis' ? 'Casa Nobre' : 'Viva Imóveis';
+  const otherAgency: Agency = targetAgency === 'Viva Imóveis' ? 'Casa Nobre' : 'Viva Imóveis';
   const otherBroker = nextBrokerFromAgency(brokers, otherAgency, excludeIds);
-  return { broker: otherBroker, agency: otherBroker?.agency ?? nextAgency };
+  return { broker: otherBroker, agency: otherBroker?.agency ?? targetAgency };
 }
 
 /**

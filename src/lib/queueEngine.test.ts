@@ -39,6 +39,7 @@ function makeBroker(
     is_external_partner: false,
     external_company: null,
     sorteio_order: null,
+    inverse_order: null,
     shift: 'manha',
     afternoon_reserved: false,
     created_at: '2026-09-20T08:00:00.000Z',
