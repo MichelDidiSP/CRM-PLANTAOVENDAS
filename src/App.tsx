@@ -466,6 +466,7 @@ function AuditoriaPanel({ sorteioResult, brokers, queue, attendanceReport }: {
                     <th className="py-2 px-3 text-slate-400 font-medium">#</th>
                     <th className="py-2 px-3 text-slate-400 font-medium">Cliente</th>
                     <th className="py-2 px-3 text-slate-400 font-medium">Corretor</th>
+                    <th className="py-2 px-3 text-slate-400 font-medium">Equipe</th>
                     <th className="py-2 px-3 text-slate-400 font-medium">Imobiliária</th>
                     <th className="py-2 px-3 text-slate-400 font-medium">Motivo</th>
                   </tr>
@@ -479,6 +480,7 @@ function AuditoriaPanel({ sorteioResult, brokers, queue, attendanceReport }: {
                         <td className="py-2.5 px-3 text-slate-500 font-mono">{i + 1}</td>
                         <td className="py-2.5 px-3 text-white font-medium">{entry.visit?.customer_name ?? '—'}</td>
                         <td className="py-2.5 px-3 text-slate-300">{broker?.operational_name ?? '—'}</td>
+                        <td className="py-2.5 px-3 text-slate-400 text-xs">{broker?.equipe ?? '—'}</td>
                         <td className="py-2.5 px-3">
                           <span className={`text-xs px-2 py-0.5 rounded-full ${reportAgency === 'Viva Imóveis' ? 'bg-amber-500/15 text-amber-400' : reportAgency === 'Casa Nobre' ? 'bg-sky-500/15 text-sky-400' : 'bg-slate-600/30 text-slate-400'}`}>{reportAgency}</span>
                         </td>
@@ -528,12 +530,17 @@ function AuditoriaPanel({ sorteioResult, brokers, queue, attendanceReport }: {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Tabela 1: Fila Direta — Empresa A (Viva) */}
         <div className="bg-slate-900 rounded-2xl border border-amber-500/20 p-6">
-          <div className="flex items-center gap-3 mb-5">
-            <div className="bg-amber-500/10 p-3 rounded-xl"><ListOrdered className="h-6 w-6 text-amber-400" /></div>
-            <div>
-              <h2 className="text-xl font-bold text-amber-400">Fila Direta — Empresa A</h2>
-              <p className="text-sm text-slate-400">Viva Imóveis · Vez Geral</p>
+          <div className="flex items-center justify-between mb-5">
+            <div className="flex items-center gap-3">
+              <div className="bg-amber-500/10 p-3 rounded-xl"><ListOrdered className="h-6 w-6 text-amber-400" /></div>
+              <div>
+                <h2 className="text-xl font-bold text-amber-400">Fila Direta — Empresa A</h2>
+                <p className="text-sm text-slate-400">Viva Imóveis · Vez Geral</p>
+              </div>
             </div>
+            <span className="text-2xl font-bold text-amber-400 tabular-nums">
+              {brokers.filter((b) => !b.is_external_partner && b.agency === 'Viva Imóveis' && b.presence_status === 'presente').length}
+            </span>
           </div>
           <div className="space-y-2">
             {[...brokers]
@@ -545,6 +552,7 @@ function AuditoriaPanel({ sorteioResult, brokers, queue, attendanceReport }: {
                   <div key={b.id} className="flex items-center gap-3 bg-slate-800/50 rounded-lg p-3 border border-amber-500/10">
                     <span className="font-mono text-sm text-amber-400/60 w-8 text-center font-bold">{i + 1}.</span>
                     <span className="text-white text-sm font-medium flex-1">{b.operational_name}</span>
+                    <span className="text-xs text-slate-500 hidden sm:inline">{b.equipe}</span>
                     <span className={`text-xs px-2 py-0.5 rounded-full ${color}`}>{label}</span>
                   </div>
                 );
@@ -557,12 +565,17 @@ function AuditoriaPanel({ sorteioResult, brokers, queue, attendanceReport }: {
 
         {/* Tabela 2: Fila Direta — Empresa B (Nobre) */}
         <div className="bg-slate-900 rounded-2xl border border-sky-500/20 p-6">
-          <div className="flex items-center gap-3 mb-5">
-            <div className="bg-sky-500/10 p-3 rounded-xl"><ListOrdered className="h-6 w-6 text-sky-400" /></div>
-            <div>
-              <h2 className="text-xl font-bold text-sky-400">Fila Direta — Empresa B</h2>
-              <p className="text-sm text-slate-400">Casa Nobre · Vez Geral</p>
+          <div className="flex items-center justify-between mb-5">
+            <div className="flex items-center gap-3">
+              <div className="bg-sky-500/10 p-3 rounded-xl"><ListOrdered className="h-6 w-6 text-sky-400" /></div>
+              <div>
+                <h2 className="text-xl font-bold text-sky-400">Fila Direta — Empresa B</h2>
+                <p className="text-sm text-slate-400">Casa Nobre · Vez Geral</p>
+              </div>
             </div>
+            <span className="text-2xl font-bold text-sky-400 tabular-nums">
+              {brokers.filter((b) => !b.is_external_partner && b.agency === 'Casa Nobre' && b.presence_status === 'presente').length}
+            </span>
           </div>
           <div className="space-y-2">
             {[...brokers]
@@ -574,6 +587,7 @@ function AuditoriaPanel({ sorteioResult, brokers, queue, attendanceReport }: {
                   <div key={b.id} className="flex items-center gap-3 bg-slate-800/50 rounded-lg p-3 border border-sky-500/10">
                     <span className="font-mono text-sm text-sky-400/60 w-8 text-center font-bold">{i + 1}.</span>
                     <span className="text-white text-sm font-medium flex-1">{b.operational_name}</span>
+                    <span className="text-xs text-slate-500 hidden sm:inline">{b.equipe}</span>
                     <span className={`text-xs px-2 py-0.5 rounded-full ${color}`}>{label}</span>
                   </div>
                 );
@@ -586,12 +600,17 @@ function AuditoriaPanel({ sorteioResult, brokers, queue, attendanceReport }: {
 
         {/* Tabela 3: Fila Inversa Geral (Decorado) */}
         <div className="bg-slate-900 rounded-2xl border border-orange-500/20 p-6">
-          <div className="flex items-center gap-3 mb-5">
-            <div className="bg-orange-500/10 p-3 rounded-xl"><Home className="h-6 w-6 text-orange-400" /></div>
-            <div>
-              <h2 className="text-xl font-bold text-orange-400">Fila Inversa Geral</h2>
-              <p className="text-sm text-slate-400">Decorado · Índice independente</p>
+          <div className="flex items-center justify-between mb-5">
+            <div className="flex items-center gap-3">
+              <div className="bg-orange-500/10 p-3 rounded-xl"><Home className="h-6 w-6 text-orange-400" /></div>
+              <div>
+                <h2 className="text-xl font-bold text-orange-400">Fila Inversa Geral</h2>
+                <p className="text-sm text-slate-400">Decorado · Índice independente</p>
+              </div>
             </div>
+            <span className="text-2xl font-bold text-orange-400 tabular-nums">
+              {brokers.filter((b) => !b.is_external_partner && b.presence_status === 'presente').length}
+            </span>
           </div>
           <div className="space-y-2">
             {[...brokers]
@@ -603,6 +622,7 @@ function AuditoriaPanel({ sorteioResult, brokers, queue, attendanceReport }: {
                   <div key={b.id} className="flex items-center gap-3 bg-slate-800/50 rounded-lg p-3 border border-orange-500/10">
                     <span className="font-mono text-sm text-orange-400/60 w-8 text-center font-bold">{i + 1}.</span>
                     <span className="text-white text-sm font-medium flex-1">{b.operational_name}</span>
+                    <span className="text-xs text-slate-500 hidden lg:inline">{b.equipe}</span>
                     <span className={`text-xs px-2 py-0.5 rounded-full ${b.agency === 'Viva Imóveis' ? 'bg-amber-500/15 text-amber-400' : 'bg-sky-500/15 text-sky-400'}`}>{b.agency}</span>
                     <span className={`text-xs px-2 py-0.5 rounded-full ${color}`}>{label}</span>
                   </div>

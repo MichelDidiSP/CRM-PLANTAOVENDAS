@@ -1,5 +1,5 @@
 import { useState, useRef, useMemo } from 'react';
-import { UserPlus, Phone, TriangleAlert as AlertTriangle, CircleCheck as CheckCircle2, Clock, Search, EyeOff, Eye, Zap, UserCheck, UserX, Building2, Trash2 } from 'lucide-react';
+import { UserPlus, Phone, TriangleAlert as AlertTriangle, CircleCheck as CheckCircle2, Clock, Search, EyeOff, Eye, Zap, UserCheck, UserX, Building2, Trash2, X } from 'lucide-react';
 import { supabase, type Broker, type Visit, type VisitReason, type Agency } from '@/lib/supabase';
 import {
   REASONS,
@@ -36,12 +36,17 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
   const [submitting, setSubmitting] = useState(false);
   const [searchPhone, setSearchPhone] = useState('');
   const [revealed, setRevealed] = useState(false);
-  const { currentShift, isPreSorteio, simSeconds, getCurrentTime } = useSim();
+  const { currentShift, simSeconds, getCurrentTime } = useSim();
 
   // Predictive search state
   const [brokerSearch, setBrokerSearch] = useState('');
   const [showResults, setShowResults] = useState(false);
   const [selectedBroker, setSelectedBroker] = useState<Broker | null>(null);
+
+  // Manual broker entry fallback state (when broker is not found in the database)
+  const [manualBrokerName, setManualBrokerName] = useState('');
+  const [manualBrokerEquipe, setManualBrokerEquipe] = useState('');
+  const [manualBrokerAgency, setManualBrokerAgency] = useState<Agency>('Viva Imóveis');
 
   // Apenas Imobiliária company picker
   const [apenasImobiliariaAgency, setApenasImobiliariaAgency] = useState<Agency>('Viva Imóveis');
@@ -89,6 +94,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
   const isParceria = reason === 'Parceria';
   const isDecorado = reason === 'Visita ao Decorado';
   const isIndicacaoForm = reason === 'Indicação';
+  const isManualEntry = isIndicacaoForm && !selectedBroker && brokerSearch.trim().length >= 2 && searchResults.length === 0;
 
   const partnerBrokers = brokers.filter((b) => b.is_external_partner);
 
@@ -104,6 +110,9 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
     setBrokerSearch('');
     setSelectedBroker(null);
     setShowResults(false);
+    setManualBrokerName('');
+    setManualBrokerEquipe('');
+    setManualBrokerAgency('Viva Imóveis');
   }
 
   function selectBroker(broker: Broker) {
@@ -118,6 +127,8 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
     setSelectedBroker(null);
     setReferredBrokerId('');
     setShowResults(false);
+    setManualBrokerName('');
+    setManualBrokerEquipe('');
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -189,6 +200,8 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
       setReferredBrokerId('');
       setBrokerSearch('');
       setSelectedBroker(null);
+      setManualBrokerName('');
+      setManualBrokerEquipe('');
     }
     setSubmitting(false);
   }
@@ -631,13 +644,59 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
 
                   {showResults && brokerSearch.length >= 2 && searchResults.length === 0 && (
                     <div className="absolute z-20 mt-1 w-full bg-slate-800 border border-slate-600 rounded-xl shadow-xl p-4">
-                      <p className="text-sm text-slate-400 mb-2">Nenhum corretor encontrado com esse nome.</p>
-                      <p className="text-xs text-slate-500">
-                        Use a opção "Apenas Imobiliária" no Simular Entrada Rápida para selecionar apenas a empresa responsável.
+                      <p className="text-sm text-slate-400 mb-3">Nenhum corretor encontrado com esse nome.</p>
+                      <p className="text-xs text-slate-500 mb-3">
+                        Cadastre manualmente o corretor informando o nome, equipe e imobiliária, ou use "Apenas Imobiliária" no Simular Entrada Rápida.
                       </p>
                     </div>
                   )}
                 </div>
+
+                {/* Manual broker entry fallback — when broker is not found in the database */}
+                {isManualEntry && (
+                  <div className="bg-slate-900/60 border border-amber-500/20 rounded-lg p-4 space-y-3">
+                    <p className="text-xs text-amber-400 font-medium">Cadastro manual de corretor indicante</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div className="sm:col-span-1">
+                        <label className="block text-xs text-slate-400 mb-1">Nome do corretor</label>
+                        <input
+                          type="text"
+                          value={manualBrokerName || brokerSearch}
+                          onChange={(e) => setManualBrokerName(e.target.value)}
+                          placeholder="Nome digitado"
+                          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                        />
+                      </div>
+                      <div className="sm:col-span-1">
+                        <label className="block text-xs text-slate-400 mb-1">Equipe</label>
+                        <input
+                          type="text"
+                          value={manualBrokerEquipe}
+                          onChange={(e) => setManualBrokerEquipe(e.target.value)}
+                          placeholder="Nome da equipe"
+                          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                        />
+                      </div>
+                      <div className="sm:col-span-1">
+                        <label className="block text-xs text-slate-400 mb-1">Imobiliária</label>
+                        <select
+                          value={manualBrokerAgency}
+                          onChange={(e) => setManualBrokerAgency(e.target.value as Agency)}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                        >
+                          <option value="Viva Imóveis">Viva Imóveis (Empresa A)</option>
+                          <option value="Casa Nobre">Casa Nobre (Empresa B)</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 flex-wrap text-xs">
+                      <span className="px-2 py-0.5 rounded-full bg-red-500/15 text-red-400">Ausente</span>
+                      <span className="text-slate-400">
+                        Transbordo: Mesma Equipe ({manualBrokerEquipe || '—'}) → Mesma Empresa ({manualBrokerAgency})
+                      </span>
+                    </div>
+                  </div>
+                )}
 
                 {/* Selected broker card with real-time status */}
                 {selectedBroker && (
