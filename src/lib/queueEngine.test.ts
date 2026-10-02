@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import {
   getDispatchMode,
   isArrivalOrderMode,
@@ -13,6 +13,9 @@ import {
   resolveIndicacaoBroker,
   dispatchBroker,
   interleaveQueue,
+  resetCompanyRotation,
+  setCompanyDrawOrder,
+  setCompanyRotationIndex,
   SORTEIO_MANHA,
   SORTEIO_TARDE,
   ATENDIMENTO_MANHA_START,
@@ -86,26 +89,33 @@ function makeQueueEntry(
 }
 
 // Brokers: 5 Viva, 5 Nobre — all present, arrived in order
+// sorteio_order is now PER-COMPANY (1-5 for each)
+// inverse_order is a single independent global sequence (mirrored)
 const vivaBrokers: Broker[] = [
-  makeBroker('v1', 'Viva_A', 'Viva Imóveis', { arrived_at: '2026-09-20T08:01:00.000Z', sorteio_order: 1 }),
-  makeBroker('v2', 'Viva_B', 'Viva Imóveis', { arrived_at: '2026-09-20T08:02:00.000Z', sorteio_order: 3 }),
-  makeBroker('v3', 'Viva_C', 'Viva Imóveis', { arrived_at: '2026-09-20T08:03:00.000Z', sorteio_order: 5 }),
-  makeBroker('v4', 'Viva_D', 'Viva Imóveis', { arrived_at: '2026-09-20T08:04:00.000Z', sorteio_order: 7 }),
-  makeBroker('v5', 'Viva_E', 'Viva Imóveis', { arrived_at: '2026-09-20T08:05:00.000Z', sorteio_order: 9 }),
+  makeBroker('v1', 'Viva_A', 'Viva Imóveis', { arrived_at: '2026-09-20T08:01:00.000Z', sorteio_order: 1, inverse_order: 10 }),
+  makeBroker('v2', 'Viva_B', 'Viva Imóveis', { arrived_at: '2026-09-20T08:02:00.000Z', sorteio_order: 2, inverse_order: 8 }),
+  makeBroker('v3', 'Viva_C', 'Viva Imóveis', { arrived_at: '2026-09-20T08:03:00.000Z', sorteio_order: 3, inverse_order: 6 }),
+  makeBroker('v4', 'Viva_D', 'Viva Imóveis', { arrived_at: '2026-09-20T08:04:00.000Z', sorteio_order: 4, inverse_order: 4 }),
+  makeBroker('v5', 'Viva_E', 'Viva Imóveis', { arrived_at: '2026-09-20T08:05:00.000Z', sorteio_order: 5, inverse_order: 2 }),
 ];
 
 const nobreBrokers: Broker[] = [
-  makeBroker('n1', 'Nobre_A', 'Casa Nobre', { arrived_at: '2026-09-20T08:00:30.000Z', sorteio_order: 2 }),
-  makeBroker('n2', 'Nobre_B', 'Casa Nobre', { arrived_at: '2026-09-20T08:00:45.000Z', sorteio_order: 4 }),
-  makeBroker('n3', 'Nobre_C', 'Casa Nobre', { arrived_at: '2026-09-20T08:01:15.000Z', sorteio_order: 6 }),
-  makeBroker('n4', 'Nobre_D', 'Casa Nobre', { arrived_at: '2026-09-20T08:01:30.000Z', sorteio_order: 8 }),
-  makeBroker('n5', 'Nobre_E', 'Casa Nobre', { arrived_at: '2026-09-20T08:01:45.000Z', sorteio_order: 10 }),
+  makeBroker('n1', 'Nobre_A', 'Casa Nobre', { arrived_at: '2026-09-20T08:00:30.000Z', sorteio_order: 1, inverse_order: 9 }),
+  makeBroker('n2', 'Nobre_B', 'Casa Nobre', { arrived_at: '2026-09-20T08:00:45.000Z', sorteio_order: 2, inverse_order: 7 }),
+  makeBroker('n3', 'Nobre_C', 'Casa Nobre', { arrived_at: '2026-09-20T08:01:15.000Z', sorteio_order: 3, inverse_order: 5 }),
+  makeBroker('n4', 'Nobre_D', 'Casa Nobre', { arrived_at: '2026-09-20T08:01:30.000Z', sorteio_order: 4, inverse_order: 3 }),
+  makeBroker('n5', 'Nobre_E', 'Casa Nobre', { arrived_at: '2026-09-20T08:01:45.000Z', sorteio_order: 5, inverse_order: 1 }),
 ];
 
 const allBrokers = [...vivaBrokers, ...nobreBrokers];
 
 // Post-sorteio dispatch time: after 09:00h when the roleta takes command
 const POST_SORTEIO_TIME = ATENDIMENTO_MANHA_START + 10 * 60; // 09:10:00
+
+beforeEach(() => {
+  resetCompanyRotation();
+  setCompanyDrawOrder(['Viva Imóveis', 'Casa Nobre']);
+});
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
@@ -151,7 +161,6 @@ describe('Temporal Divisor (Rule 1)', () => {
 describe('Pre-Sorteio Arrival Order (Rule 1 — before 08:46h)', () => {
   it('Vez Geral: 1st client calls 1st broker to arrive, 2nd calls 2nd, 3rd calls 3rd', () => {
     const exclude = new Set<string>();
-    // Sorted by arrival: n1(08:00:30), n2(08:00:45), v1(08:01:00), n3(08:01:15), n4(08:01:30)...
     const b1 = nextBrokerByArrivalAnyAgency(allBrokers, exclude);
     expect(b1?.id).toBe('n1');
 
@@ -170,7 +179,6 @@ describe('Pre-Sorteio Arrival Order (Rule 1 — before 08:46h)', () => {
 
   it('Decorado: inverse arrival — last to arrive is first for decorado', () => {
     const exclude = new Set<string>();
-    // Inverse sorted by arrival: v5(08:05:00), v4(08:04:00), v3(08:03:00)...
     const b1 = nextBrokerByArrivalInverse(allBrokers, exclude);
     expect(b1?.id).toBe('v5');
 
@@ -196,36 +204,51 @@ describe('Pre-Sorteio Arrival Order (Rule 1 — before 08:46h)', () => {
   });
 });
 
-describe('Pós-Sorteio Intercalation (Rule 3)', () => {
-  it('Vez Geral: respects agency turn — next agency\'s first Livre broker is picked', () => {
-    // lastCalledAgency='Viva Imóveis' → next is Casa Nobre → n1 (sorteio_order 2)
-    const result = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, new Set(), 'Viva Imóveis', null);
-    expect(result.broker?.id).toBe('n1');
-    expect(result.broker?.agency).toBe('Casa Nobre');
-
-    // lastCalledAgency='Casa Nobre' → next is Viva Imóveis → v1 (sorteio_order 1)
-    const result2 = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, new Set(), 'Casa Nobre', null);
-    expect(result2.broker?.id).toBe('v1');
-    expect(result2.broker?.agency).toBe('Viva Imóveis');
-  });
-
-  it('Vez Geral with no lastCalledAgency: sorteio top determines starting agency', () => {
-    // sorteio_order 1 = v1 (Viva) → Viva goes first
+describe('Pós-Sorteio: Three Isolated Queues (Rule 3)', () => {
+  it('Vez Geral: rotation pointer at 0 (Viva) → top of Viva direct queue (v1)', () => {
     const result = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, new Set(), null, null);
     expect(result.broker?.id).toBe('v1');
     expect(result.broker?.agency).toBe('Viva Imóveis');
   });
 
-  it('Decorado: uses inverse sorteio — top of inverse queue by agency turn', () => {
+  it('Vez Geral: rotation pointer at 1 (Nobre) → top of Nobre direct queue (n1)', () => {
+    setCompanyRotationIndex(1);
+    const result = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, new Set(), null, null);
+    expect(result.broker?.id).toBe('n1');
+    expect(result.broker?.agency).toBe('Casa Nobre');
+  });
+
+  it('Vez Geral alternates Viva → Nobre → Viva via rotation pointer', () => {
+    const exclude = new Set<string>();
+    const r1 = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, exclude, null, null);
+    expect(r1.broker?.agency).toBe('Viva Imóveis');
+    exclude.add(r1.broker!.id);
+
+    const r2 = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, exclude, null, null);
+    expect(r2.broker?.agency).toBe('Casa Nobre');
+    exclude.add(r2.broker!.id);
+
+    const r3 = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, exclude, null, null);
+    expect(r3.broker?.agency).toBe('Viva Imóveis');
+  });
+
+  it('Decorado: strictly dispatches top of inverse queue regardless of brand (n5, inverse_order=1)', () => {
     const result = dispatchBroker(allBrokers, 'decorado', POST_SORTEIO_TIME, new Set(), null, null);
-    // Inverse top = highest sorteio_order = n5 (10, Casa Nobre) → n5 is Livre
     expect(result.broker?.id).toBe('n5');
   });
 
-  it('Excludes busy brokers — next available Livre from same agency is picked', () => {
+  it('Decorado and Geral use fully independent queues', () => {
+    const geralTop = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, new Set(), null, null);
+    const decoradoTop = dispatchBroker(allBrokers, 'decorado', POST_SORTEIO_TIME, new Set(), null, null);
+    // Geral top = Viva's sorteio_order 1 (v1), Decorado top = inverse_order 1 (n5)
+    expect(geralTop.broker?.id).toBe('v1');
+    expect(decoradoTop.broker?.id).toBe('n5');
+  });
+
+  it('Excludes busy brokers — next available Livre from same agency', () => {
     const busy = new Set(['v1', 'n1']);
-    // lastCalledAgency='Casa Nobre' → next is Viva → v1 busy → v2 (sorteio_order 3)
-    const result = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, busy, 'Casa Nobre', null);
+    // Pointer at 0 (Viva) → v1 busy → v2 (sorteio_order 2)
+    const result = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, busy, null, null);
     expect(result.broker?.agency).toBe('Viva Imóveis');
     expect(result.broker?.id).toBe('v2');
   });
@@ -261,7 +284,6 @@ describe('Hierarchical Transbordo for Indicação (Rule 2)', () => {
   });
 
   it('Step 4: all corporate instances exhausted → last broker of referred agency', () => {
-    // All Viva absent, all Nobre busy → fall back to last of Viva
     const allVivaAbsent = allBrokers.map((b) =>
       b.agency === 'Viva Imóveis' ? { ...b, presence_status: 'ausente' as const } : b,
     );
@@ -269,7 +291,6 @@ describe('Hierarchical Transbordo for Indicação (Rule 2)', () => {
       b.agency === 'Casa Nobre' ? { ...b, attendance_status: 'em_mesa' as const } : b,
     );
     const result = resolveIndicacaoBroker(allNobreBusy, 'v1', new Set());
-    // No one available → last_of_agency returns undefined since all Viva are ausente
     expect(result.source).toBe('last_of_agency');
     expect(result.broker).toBeUndefined();
   });
@@ -285,39 +306,27 @@ describe('Dynamic Queue Advancement (Rule 4)', () => {
   it('Multiple clients can be dispatched simultaneously — each gets next available', () => {
     const exclude = new Set<string>();
 
-    // Client 1 → top of geral (sorteio start = Viva)
     const r1 = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, exclude, null, null);
     expect(r1.broker).toBeDefined();
     exclude.add(r1.broker!.id);
 
-    // Client 2 → next agency turn (Nobre)
-    const r2 = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, exclude, r1.agency, null);
+    const r2 = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, exclude, null, null);
     expect(r2.broker).toBeDefined();
     expect(r2.broker?.id).not.toBe(r1.broker?.id);
     exclude.add(r2.broker!.id);
 
-    // Client 3 → next agency turn (Viva)
-    const r3 = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, exclude, r2.agency, null);
+    const r3 = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, exclude, null, null);
     expect(r3.broker).toBeDefined();
     expect(r3.broker?.id).not.toBe(r1.broker?.id);
     expect(r3.broker?.id).not.toBe(r2.broker?.id);
   });
 
-  it('Decorado and Geral use independent queues — same broker can be top of both', () => {
-    const geralTop = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, new Set(), null, null);
-    const decoradoTop = dispatchBroker(allBrokers, 'decorado', POST_SORTEIO_TIME, new Set(), null, null);
-
-    // Geral top = lowest sorteio_order (1 = v1), Decorado top = highest (10 = n5)
-    expect(geralTop.broker?.id).toBe('v1');
-    expect(decoradoTop.broker?.id).toBe('n5');
-  });
-
   it('3 strikes: after 3 failed calls, broker is excluded and next Livre is called', () => {
-    const busy = new Set<string>(['v1']); // v1 was called 3 times and is now paused
-    // lastCalledAgency='Viva' → next is Nobre → n1 (sorteio_order 2)
-    const result = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, busy, 'Viva Imóveis', null);
-    expect(result.broker?.id).toBe('n1');
-    expect(result.broker?.agency).toBe('Casa Nobre');
+    const busy = new Set<string>(['v1']);
+    // Pointer at 0 (Viva) → v1 busy → v2 (next Viva Livre)
+    const result = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, busy, null, null);
+    expect(result.broker?.id).toBe('v2');
+    expect(result.broker?.agency).toBe('Viva Imóveis');
   });
 });
 
@@ -325,27 +334,22 @@ describe('Batch Test: 20+ Clients (Rule 5 + Intercalation)', () => {
   it('dispatches 25 sequential Vez Geral clients without repeating a broker until all have served', () => {
     const exclude = new Set<string>();
     const dispatched: string[] = [];
-    let lastAgency: Agency | null = null;
 
     for (let i = 0; i < 25; i++) {
-      const result = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, exclude, lastAgency, null);
+      const result = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, exclude, null, null);
       if (!result.broker) {
-        // All 10 brokers have served — reset exclusion (simulating reentry cycle)
         exclude.clear();
-        const retry = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, exclude, lastAgency, null);
+        const retry = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, exclude, null, null);
         expect(retry.broker).toBeDefined();
         dispatched.push(retry.broker!.id);
         exclude.add(retry.broker!.id);
-        lastAgency = retry.agency;
         continue;
       }
       dispatched.push(result.broker!.id);
       exclude.add(result.broker!.id);
-      lastAgency = result.agency;
     }
 
     expect(dispatched.length).toBe(25);
-    // First 10 should all be unique (all brokers serve once before any reentry)
     const first10 = new Set(dispatched.slice(0, 10));
     expect(first10.size).toBe(10);
   });
@@ -353,23 +357,20 @@ describe('Batch Test: 20+ Clients (Rule 5 + Intercalation)', () => {
   it('alternates agencies in post-sorteio mode (Viva → Nobre → Viva → ...)', () => {
     const exclude = new Set<string>();
     const agencies: Agency[] = [];
-    let lastAgency: Agency | null = null;
 
     for (let i = 0; i < 10; i++) {
-      const result = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, exclude, lastAgency, null);
+      const result = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, exclude, null, null);
       if (!result.broker) break;
       agencies.push(result.agency);
       exclude.add(result.broker!.id);
-      lastAgency = result.agency;
     }
 
-    // Should alternate: no two consecutive same agency
     for (let i = 1; i < agencies.length; i++) {
       expect(agencies[i]).not.toBe(agencies[i - 1]);
     }
   });
 
-  it('decorado dispatches in reverse intercalation order', () => {
+  it('decorado dispatches in inverse order (n5, n4, v4, v5...)', () => {
     const exclude = new Set<string>();
     const order: string[] = [];
 
@@ -381,14 +382,15 @@ describe('Batch Test: 20+ Clients (Rule 5 + Intercalation)', () => {
     }
 
     expect(order.length).toBe(10);
-    // First decorado = highest sorteio_order (n5=10), then n4(8), v4(7)...
+    // inverse_order 1 = n5, 2 = v5, 3 = n4, 4 = v4...
     expect(order[0]).toBe('n5');
+    expect(order[1]).toBe('v5');
   });
 
   it('pre-sorteio: 20 clients dispatched in pure arrival order', () => {
     const exclude = new Set<string>();
     const order: string[] = [];
-    const preSorteioTime = 8 * 3600 + 20 * 60; // 08:20h
+    const preSorteioTime = 8 * 3600 + 20 * 60;
 
     for (let i = 0; i < 20; i++) {
       const result = dispatchBroker(allBrokers, 'geral', preSorteioTime, exclude, null, null);
@@ -405,9 +407,7 @@ describe('Batch Test: 20+ Clients (Rule 5 + Intercalation)', () => {
     }
 
     expect(order.length).toBe(20);
-    // First broker should be the earliest to arrive (n1 at 08:00:30)
     expect(order[0]).toBe('n1');
-    // Second should be n2 (08:00:45)
     expect(order[1]).toBe('n2');
   });
 
@@ -424,7 +424,6 @@ describe('Batch Test: 20+ Clients (Rule 5 + Intercalation)', () => {
     }
 
     expect(order.length).toBe(10);
-    // First decorado = last to arrive (v5 at 08:05:00)
     expect(order[0]).toBe('v5');
     expect(order[1]).toBe('v4');
   });
@@ -439,7 +438,6 @@ describe('Intercalation Function', () => {
 
     const result = interleaveQueue(entries, allBrokers, null);
     expect(result.length).toBe(6);
-    // Should alternate Viva, Nobre, Viva, Nobre...
     expect(result[0].agency).toBe('Viva Imóveis');
     expect(result[1].agency).toBe('Casa Nobre');
     expect(result[2].agency).toBe('Viva Imóveis');
@@ -447,30 +445,33 @@ describe('Intercalation Function', () => {
   });
 });
 
-describe('Dynamic Return Rule (Rule 3 — Término de Atendimento)', () => {
-  it('moveBrokerToEndOfQueue sends broker to highest sorteio_order + 1', () => {
-    // v1 has sorteio_order 1, max in Viva is 9 (v5)
-    // After moving v1 to end, v1 should have sorteio_order 10
-    const vivaWithOrder = allBrokers.filter((b) => b.agency === 'Viva Imóveis');
-    const maxOrder = Math.max(...vivaWithOrder.map((b) => b.sorteio_order ?? 0));
-    expect(maxOrder).toBe(9);
+describe('Per-Company Direct Queue Independence (Rule 3 — Sorteio)', () => {
+  it('sorteio_order is per-company: each agency has its own 1-N sequence', () => {
+    const vivaOrders = vivaBrokers.map((b) => b.sorteio_order).filter((o): o is number => o != null);
+    const nobreOrders = nobreBrokers.map((b) => b.sorteio_order).filter((o): o is number => o != null);
 
-    // Simulate: v1 gets new sorteio_order = maxOrder + 1 = 10
-    const updatedBrokers = allBrokers.map((b) =>
-      b.id === 'v1' ? { ...b, sorteio_order: maxOrder + 1 } : b,
-    );
-    const updatedV1 = updatedBrokers.find((b) => b.id === 'v1');
-    expect(updatedV1?.sorteio_order).toBe(10);
+    // Viva: 1, 2, 3, 4, 5
+    expect(Math.max(...vivaOrders)).toBe(5);
+    // Nobre: 1, 2, 3, 4, 5 (independent numbering)
+    expect(Math.max(...nobreOrders)).toBe(5);
+  });
 
-    // Now v2 should be the first in Viva (sorteio_order 3)
-    const nextViva = nextBrokerFromAgency(updatedBrokers, 'Viva Imóveis', new Set());
-    expect(nextViva?.id).toBe('v2');
+  it('inverse_order is a single global sequence across both agencies', () => {
+    const allInverse = allBrokers.map((b) => b.inverse_order).filter((o): o is number => o != null);
+    expect(Math.max(...allInverse)).toBe(10);
+    expect(Math.min(...allInverse)).toBe(1);
+  });
+
+  it('nextBrokerFromAgency returns top of that company queue only', () => {
+    const vivaTop = nextBrokerFromAgency(allBrokers, 'Viva Imóveis', new Set());
+    const nobreTop = nextBrokerFromAgency(allBrokers, 'Casa Nobre', new Set());
+    expect(vivaTop?.id).toBe('v1');
+    expect(nobreTop?.id).toBe('n1');
   });
 
   it('two brokers never share the same position after recompute', () => {
-    // After v1 moves to end (order 10), all Viva brokers should have unique orders
     const updatedBrokers = allBrokers.map((b) =>
-      b.id === 'v1' ? { ...b, sorteio_order: 10 } : b,
+      b.id === 'v1' ? { ...b, sorteio_order: 6 } : b,
     );
     const vivaOrders = updatedBrokers
       .filter((b) => b.agency === 'Viva Imóveis')
@@ -478,6 +479,32 @@ describe('Dynamic Return Rule (Rule 3 — Término de Atendimento)', () => {
       .filter((o): o is number => o != null);
     const uniqueOrders = new Set(vivaOrders);
     expect(uniqueOrders.size).toBe(vivaOrders.length);
+  });
+});
+
+describe('Inverse Queue Isolation (Rule 3 — Decorado)', () => {
+  it('nextBrokerFromInverseTop returns broker with lowest inverse_order regardless of brand', () => {
+    const top = nextBrokerFromInverseTop(allBrokers, new Set());
+    expect(top?.id).toBe('n5');
+    expect(top?.inverse_order).toBe(1);
+  });
+
+  it('inverse queue dispatches in inverse_order sequence, not by agency', () => {
+    const exclude = new Set<string>();
+    const order: string[] = [];
+
+    for (let i = 0; i < 10; i++) {
+      const result = nextBrokerFromInverseTop(allBrokers, exclude);
+      if (!result) break;
+      order.push(result.id);
+      exclude.add(result.id);
+    }
+
+    expect(order.length).toBe(10);
+    // n5(1), v5(2), n4(3), v4(4), n3(5), v3(6), n2(7), v2(8), n1(9), v1(10)
+    expect(order[0]).toBe('n5');
+    expect(order[1]).toBe('v5');
+    expect(order[2]).toBe('n4');
   });
 });
 

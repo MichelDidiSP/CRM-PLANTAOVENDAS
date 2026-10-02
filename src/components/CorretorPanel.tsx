@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { UserCheck, UserX, Clock, Coffee, Table2, Chrome as Home, CircleCheck as CheckCircle, Plus, Trash2, ExternalLink, Users as Users2, Sun, Moon, Bookmark } from 'lucide-react';
+import { UserCheck, UserX, Clock, Coffee, Table2, Chrome as Home, CircleCheck as CheckCircle, Plus, Trash2, ExternalLink, Users as Users2, Sun, Moon, Bookmark, Eye } from 'lucide-react';
 import { supabase, type Broker, type BrokerPresence, type AttendanceStatus, type Agency, type Shift } from '@/lib/supabase';
 import { AGENCIES, isLateForSort, isBeyondBarrier, pushLateBrokerToQueues } from '@/lib/queueEngine';
 import { useSim } from '@/lib/simContext';
@@ -174,7 +174,8 @@ export default function CorretorPanel({ brokers }: Props) {
                   <p className="text-xs uppercase tracking-wide text-slate-500 mb-2">Atendimento</p>
                   <div className="flex flex-wrap gap-2">
                     <AttendanceButton active={broker.attendance_status === 'livre'} onClick={() => updateAttendance(broker, 'livre')} icon={<UserCheck className="h-4 w-4" />} label="Livre" />
-                    <AttendanceButton active={broker.attendance_status === 'em_mesa'} onClick={() => updateAttendance(broker, 'em_mesa')} icon={<Table2 className="h-4 w-4" />} label="Em mesa" />
+                    <AttendanceButton active={broker.attendance_status === 'em_mesa'} onClick={() => updateAttendance(broker, 'em_mesa')} icon={<Table2 className="h-4 w-4" />} label="Chamado" />
+                    <AttendanceButton active={broker.attendance_status === 'em_atendimento'} onClick={() => updateAttendance(broker, 'em_atendimento')} icon={<Eye className="h-4 w-4" />} label="Em Atendimento" />
                     <AttendanceButton active={broker.attendance_status === 'decorado'} onClick={() => updateAttendance(broker, 'decorado')} icon={<Home className="h-4 w-4" />} label="Decorado" />
                     <AttendanceButton active={broker.attendance_status === 'encerrado'} onClick={() => updateAttendance(broker, 'encerrado')} icon={<CheckCircle className="h-4 w-4" />} label="Encerrado" />
                   </div>

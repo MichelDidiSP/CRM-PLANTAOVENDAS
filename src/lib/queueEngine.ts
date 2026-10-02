@@ -91,13 +91,6 @@ export function resetCompanyRotation(): void {
 export const QUICK_REASONS: VisitReason[] = ['Primeira visita', 'Retorno', 'Indicação', 'Parceria', 'Visita ao Decorado', 'Indicação Presente', 'Indicação Ausente', 'Indicação Imobiliária'];
 export const QUEUE_TYPES: QueueType[] = ['geral', 'decorado', 'parceria'];
 
-/**
- * Temporal Divisor: determines which dispatch mode the system is in.
- * - 'arrival': pre-sorteio morning (before 08:46h) — pure arrival-order queue
- * - 'sorteio_manha': morning sorteio active (08:46h to 13:59h) — intercalated roleta
- * - 'pre_tarde': 13:00h to 13:59h — morning sorteio still governs, afternoon check-in opens
- * - 'sorteio_tarde': 14:00h+ — afternoon sorteio active
- */
 export type DispatchMode = 'arrival' | 'sorteio_manha' | 'pre_tarde' | 'sorteio_tarde';
 
 export function getDispatchMode(simSeconds: number): DispatchMode {
@@ -110,27 +103,16 @@ export function getDispatchMode(simSeconds: number): DispatchMode {
 const TARDE_CHECKIN_OPEN_SECONDS = 13 * 3600;       // 13:00:00
 const TARDE_ATEND_START_SECONDS = 14 * 3600;          // 14:00:00
 
-/**
- * Is the system in pre-sorteio mode (arrival order, no roleta)?
- */
 export function isArrivalOrderMode(simSeconds: number): boolean {
   return getDispatchMode(simSeconds) === 'arrival';
 }
 
-/**
- * Arrival-order dispatch lock: the roleta's sorteio fires at 08:46h but does NOT
- * take command of dispatch until 09:00h sharp. Between 08:46h and 08:59:59 the
- * motor still dispatches by arrival order (ponto timestamp), ignoring the sorteio.
- */
 export function isArrivalOrderDispatchActive(simSeconds: number): boolean {
   if (simSeconds < ATENDIMENTO_MANHA_START) return true;
   if (simSeconds >= SORTEIO_TARDE && simSeconds < ATENDIMENTO_TARDE_START) return true;
   return false;
 }
 
-/**
- * Is the morning sorteio still governing the plantao (08:46h to 13:59h)?
- */
 export function isManhaSorteioActive(simSeconds: number): boolean {
   const mode = getDispatchMode(simSeconds);
   return mode === 'sorteio_manha' || mode === 'pre_tarde';
@@ -158,12 +140,12 @@ export type SorteioResult = {
 /**
  * Sorteio automático:
  * Manhã: às 08:46:00 | Tarde: às 13:46:00
- * 1. Pegar corretores presentes até o limite de check-in de cada imobiliária.
- * 2. Embaralhar cada lista (Fisher-Yates).
- * 3. Sorteio entre Empresas: define quem inicia a intercalação.
- * 4. Intercalar respeitando o vencedor.
- * 5. Atrasados entram no fim com tag "Atrasado".
- * 6. Persistir sorteio_order e criar plantao_session.
+ *
+ * ARCHITECTURAL ISOLATION:
+ * 1. Each company gets its own independent sorteio_order sequence (1, 2, 3... within agency).
+ * 2. The inverse queue is a single mirrored list with its own independent inverse_order (1, 2, 3...).
+ * 3. After the draw, these three arrays are fully decoupled — no shared references.
+ * 4. Late brokers are pushed to the END of their own company queue AND the inverse queue.
  */
 export async function executeSorteio(brokers: Broker[], simSeconds: number, shift: Shift): Promise<SorteioResult | null> {
   const eligible = brokers.filter(
@@ -176,23 +158,32 @@ export async function executeSorteio(brokers: Broker[], simSeconds: number, shif
   const vivaOnTime = onTime.filter((b) => b.agency === 'Viva Imóveis');
   const nobreOnTime = onTime.filter((b) => b.agency === 'Casa Nobre');
 
+  // Fisher-Yates shuffle each company independently
   const shuffledViva = shuffleArray(vivaOnTime);
   const shuffledNobre = shuffleArray(nobreOnTime);
 
+  // Company draw — who starts the rotation
   const desempateWinner: Agency = Math.random() < 0.5 ? 'Viva Imóveis' : 'Casa Nobre';
 
+  // Late brokers per agency
+  const lateViva = late.filter((b) => b.agency === 'Viva Imóveis');
+  const lateNobre = late.filter((b) => b.agency === 'Casa Nobre');
+
+  // Company A (Viva) direct queue: on-time shuffled + late pushed to end
+  const vivaDirect = [...shuffledViva, ...lateViva];
+  // Company B (Nobre) direct queue: on-time shuffled + late pushed to end
+  const nobreDirect = [...shuffledNobre, ...lateNobre];
+
+  // Inverse queue: mirror of ALL eligible brokers (interleaved reversed), then late at end
+  // Build the intercalated order for the visual result only
   const first = desempateWinner === 'Viva Imóveis' ? shuffledViva : shuffledNobre;
   const second = desempateWinner === 'Viva Imóveis' ? shuffledNobre : shuffledViva;
-
   const interleaved: Broker[] = [];
   const maxLen = Math.max(first.length, second.length);
   for (let i = 0; i < maxLen; i++) {
     if (first[i]) interleaved.push(first[i]);
     if (second[i]) interleaved.push(second[i]);
   }
-
-  const lateViva = late.filter((b) => b.agency === 'Viva Imóveis');
-  const lateNobre = late.filter((b) => b.agency === 'Casa Nobre');
   const lateFirst = desempateWinner === 'Viva Imóveis' ? lateViva : lateNobre;
   const lateSecond = desempateWinner === 'Viva Imóveis' ? lateNobre : lateViva;
   const lateInterleaved: Broker[] = [];
@@ -202,24 +193,27 @@ export async function executeSorteio(brokers: Broker[], simSeconds: number, shif
     if (lateSecond[i]) lateInterleaved.push(lateSecond[i]);
   }
 
+  // Inverse queue = reversed intercalated on-time + late at end (independent numbering)
+  const inverseOrder = [...interleaved].reverse();
+  for (const b of lateInterleaved) inverseOrder.push(b);
+
   const finalOrder = [...interleaved, ...lateInterleaved];
   const sessionId = `sorteio_${shift}_${Date.now()}`;
 
-  // Direct queue: sorteio_order = 1, 2, 3... (intercalated order)
-  // Inverse queue: inverse_order = mirrored from direct, then independently numbered
-  // The inverse queue is the direct queue reversed and renumbered 1, 2, 3...
-  // Late brokers are pushed to the END of BOTH queues via .push()
-  const directOrder = [...interleaved, ...lateInterleaved];
-  const inverseOrder = [...interleaved].reverse();
-  // Late brokers go to the end of the inverse queue too, via .push()
-  for (const b of lateInterleaved) inverseOrder.push(b);
-
-  for (let i = 0; i < directOrder.length; i++) {
+  // Persist: each company's sorteio_order is INDEPENDENT (1, 2, 3... within agency)
+  for (let i = 0; i < vivaDirect.length; i++) {
     await supabase
       .from('brokers')
       .update({ sorteio_order: i + 1, shift })
-      .eq('id', directOrder[i].id);
+      .eq('id', vivaDirect[i].id);
   }
+  for (let i = 0; i < nobreDirect.length; i++) {
+    await supabase
+      .from('brokers')
+      .update({ sorteio_order: i + 1, shift })
+      .eq('id', nobreDirect[i].id);
+  }
+  // Persist: inverse queue has its own independent global numbering (1, 2, 3...)
   for (let i = 0; i < inverseOrder.length; i++) {
     await supabase
       .from('brokers')
@@ -254,10 +248,6 @@ export async function executeSorteio(brokers: Broker[], simSeconds: number, shif
   };
 }
 
-/**
- * Reiniciar plantão: limpa a fila atual, zera o relógio, coloca corretores como disponíveis.
- * NÃO apaga visitas (banco de clientes permanece intacto).
- */
 export async function reiniciarPlantao(brokers: Broker[]): Promise<void> {
   await supabase.from('queue_entries').delete().neq('id', '00000000-0000-0000-0000-000000000000');
 
@@ -290,21 +280,13 @@ export async function reiniciarPlantao(brokers: Broker[]): Promise<void> {
   resetCompanyRotation();
 }
 
-/**
- * Transição de turno às 14:00h:
- * 1. Limpa a fila da manhã (queue_entries com shift='manha' e status 'aguardando').
- * 2. Corretores em atendimento continuam — marcados com afternoon_reserved.
- * 3. Outros corretores voltam para novo check-in (presence_status='ausente', shift=null).
- */
 export async function transitionToAfternoon(brokers: Broker[]): Promise<void> {
-  // Encerrar sessões da manhã
   await supabase
     .from('plantao_sessions')
     .update({ status: 'ended', ended_at: new Date().toISOString() })
     .eq('shift', 'manha')
     .eq('status', 'active');
 
-  // Limpar fila da manhã (apenas aguardando — em atendimento e concluídos permanecem para auditoria)
   await supabase
     .from('queue_entries')
     .delete()
@@ -313,15 +295,13 @@ export async function transitionToAfternoon(brokers: Broker[]): Promise<void> {
 
   for (const broker of brokers) {
     if (broker.is_external_partner) continue;
-    const inAttendance = broker.attendance_status === 'em_mesa' || broker.attendance_status === 'decorado';
+    const inAttendance = broker.attendance_status === 'em_mesa' || broker.attendance_status === 'decorado' || broker.attendance_status === 'em_atendimento';
     if (inAttendance) {
-      // Corretor continua em atendimento — vaga reservada na tarde
       await supabase
         .from('brokers')
         .update({ afternoon_reserved: true, shift: null })
         .eq('id', broker.id);
     } else {
-      // Resetar para novo check-in
       await supabase
         .from('brokers')
         .update({
@@ -341,13 +321,11 @@ export async function transitionToAfternoon(brokers: Broker[]): Promise<void> {
   resetCompanyRotation();
 }
 
+const PRIORITY_REASONS: VisitReason[] = ['Retorno', 'Indicação'];
+
 /**
- * Intercalação Institucional Infinita:
- * Mantém A -> B -> A -> B... na fila geral.
- * Usa sorteio_order para ordenar dentro de cada agência.
- * Quando uma agência tem menos entries, a outra continua — mas a alternância
- * é reiniciada quando novos clientes da agência menor chegam.
- * Reentradas vão para o final ordenadas por reentry_at.
+ * Client-side interleave for display only — alternates Viva/Nobre entries
+ * based on the persistent rotation pointer. Used to show the waiting list.
  */
 export function interleaveQueue(entries: QueueEntry[], brokers: Broker[], lastCalledAgency?: Agency | null): QueueEntry[] {
   const waiting = entries.filter((e) => e.queue_type === 'geral' && e.queue_status === 'aguardando');
@@ -360,7 +338,6 @@ export function interleaveQueue(entries: QueueEntry[], brokers: Broker[], lastCa
   const viva = waiting.filter((e) => e.agency === 'Viva Imóveis').sort((a, b) => sortKey(entries, brokers, a) - sortKey(entries, brokers, b));
   const nobre = waiting.filter((e) => e.agency === 'Casa Nobre').sort((a, b) => sortKey(entries, brokers, a) - sortKey(entries, brokers, b));
 
-  // Determinar quem começa: se a última chamada foi Viva, a próxima é Nobre, e vice-versa
   const startWithViva = lastCalledAgency ? lastCalledAgency !== 'Viva Imóveis' : true;
 
   const interleaved: QueueEntry[] = [];
@@ -375,16 +352,18 @@ export function interleaveQueue(entries: QueueEntry[], brokers: Broker[], lastCa
   return [...interleaved, ...sortedReentries];
 }
 
+/**
+ * Inverse queue display — sorts by inverse_order ascending (the inverse
+ * queue's own independent numbering). No agency intercalation here.
+ */
 export function reverseInterleaveQueue(entries: QueueEntry[], brokers: Broker[]): QueueEntry[] {
   const waiting = entries.filter((e) => e.queue_type === 'geral' && e.queue_status === 'aguardando');
   const reentries = entries.filter((e) => e.queue_type === 'geral' && e.queue_status === 'ausente' && e.reentry_at);
 
-  // Sort by inverse_order ascending — the inverse queue has its own independent numbering
   const sortedReentries = [...reentries].sort(
     (a, b) => new Date(a.reentry_at!).getTime() - new Date(b.reentry_at!).getTime(),
   );
 
-  // Separate on-time and late brokers based on inverse_order
   const lateIds = new Set(
     brokers
       .filter((b) => isLateForSort(b.arrived_at, b.shift ?? 'manha'))
@@ -401,14 +380,11 @@ export function reverseInterleaveQueue(entries: QueueEntry[], brokers: Broker[])
 
   const late = waiting.filter((e) => e.broker_id && lateIds.has(e.broker_id));
 
-  // On-time brokers sorted by inverse_order ascending, then late at the end via .push()
   const result: QueueEntry[] = [...onTime];
   result.push(...late);
   result.push(...sortedReentries);
   return result;
 }
-
-const PRIORITY_REASONS: VisitReason[] = ['Retorno', 'Indicação'];
 
 function sortKey(entries: QueueEntry[], brokers: Broker[], entry: QueueEntry): number {
   const visit = entries.find((e) => e.id === entry.id)?.visit;
@@ -432,8 +408,10 @@ function sortKey(entries: QueueEntry[], brokers: Broker[], entry: QueueEntry): n
 }
 
 /**
- * Returns the first 'Livre' broker from a given agency, sorted by sorteio_order ascending.
- * Brokers with status 'Chamado', 'Em Atendimento', or 'Pausado' are skipped.
+ * Returns the broker at the CURRENT TOP (index 0) of a specific company's
+ * direct queue — i.e. the Livre broker with the lowest sorteio_order
+ * within that agency. Brokers with status em_mesa, em_atendimento,
+ * decorado, encerrado, pausa, or apenas_indicacao are skipped.
  */
 export function nextBrokerFromAgency(brokers: Broker[], agency: Agency, excludeIds: Set<string>): Broker | undefined {
   const agencyBrokers = brokers
@@ -445,12 +423,11 @@ export function nextBrokerFromAgency(brokers: Broker[], agency: Agency, excludeI
 
 /**
  * Picks the next broker for the general queue using the persistent company
- * rotation pointer. The pointer is stored in LocalStorage and advances
- * by 1 (mod totalCompanies) after each successful dispatch. This ensures
- * correct alternation Viva → Nobre → Viva → ... regardless of caller state.
+ * rotation pointer. When it is Company A's turn, strictly fetch the broker
+ * at the CURRENT TOP (index 0) of Company A's direct queue.
  *
- * If the target agency has 100% of brokers busy, the system transbords to
- * the other agency WITHOUT advancing the pointer.
+ * If the target agency has all brokers busy, transbords to the other agency
+ * WITHOUT advancing the pointer.
  */
 export function nextBrokerForGeneralQueue(
   brokers: Broker[],
@@ -473,10 +450,6 @@ export function nextBrokerForGeneralQueue(
   return { broker: otherBroker, agency: otherBroker?.agency ?? targetAgency };
 }
 
-/**
- * Pre-sorteio: picks the first available broker by arrival order (not sorteio).
- * Used for Vez Geral before 08:46h.
- */
 export function nextBrokerByArrival(brokers: Broker[], agency: Agency, excludeIds: Set<string>): Broker | undefined {
   const agencyBrokers = brokers
     .filter((b) => !b.is_external_partner && b.agency === agency && b.presence_status === 'presente' && b.attendance_status === 'livre' && !excludeIds.has(b.id))
@@ -489,10 +462,6 @@ export function nextBrokerByArrival(brokers: Broker[], agency: Agency, excludeId
   return agencyBrokers[0];
 }
 
-/**
- * Pre-sorteio: picks the first available broker by arrival order across ALL agencies.
- * 1st client calls 1st broker who arrived, 2nd calls 2nd, etc.
- */
 export function nextBrokerByArrivalAnyAgency(brokers: Broker[], excludeIds: Set<string>): Broker | undefined {
   const available = brokers
     .filter((b) => !b.is_external_partner && b.presence_status === 'presente' && b.attendance_status === 'livre' && !isApenasIndicacao(b) && !excludeIds.has(b.id))
@@ -505,10 +474,6 @@ export function nextBrokerByArrivalAnyAgency(brokers: Broker[], excludeIds: Set<
   return available[0];
 }
 
-/**
- * Pre-sorteio inverse: picks the LAST available broker by arrival order.
- * Used for Visita ao Decorado before 08:46h (inverse queue = last to arrive).
- */
 export function nextBrokerByArrivalInverse(brokers: Broker[], excludeIds: Set<string>): Broker | undefined {
   const available = brokers
     .filter((b) => !b.is_external_partner && b.presence_status === 'presente' && b.attendance_status === 'livre' && !isApenasIndicacao(b) && !excludeIds.has(b.id))
@@ -521,11 +486,6 @@ export function nextBrokerByArrivalInverse(brokers: Broker[], excludeIds: Set<st
   return available[0];
 }
 
-/**
- * Indicação Module 3 — Rule 2 & 3: pick the LAST available broker from an agency
- * (fim da fila atual). Used when the referred broker is absent, or when the
- * client only knows the agency brand.
- */
 export function lastBrokerFromAgency(brokers: Broker[], agency: Agency, excludeIds: Set<string>): Broker | undefined {
   const agencyBrokers = brokers
     .filter((b) => !b.is_external_partner && b.agency === agency && b.presence_status === 'presente' && b.attendance_status === 'livre' && !isApenasIndicacao(b) && !excludeIds.has(b.id))
@@ -536,19 +496,21 @@ export function lastBrokerFromAgency(brokers: Broker[], agency: Agency, excludeI
 
 /**
  * Late check-in push: when a broker checks in after the sorteio (08:46h),
- * they are appended to the END of both queues independently via .push():
- * - Direct queue: sorteio_order = max(sorteio_order across ALL brokers) + 1
- * - Inverse queue: inverse_order = max(inverse_order across ALL brokers) + 1
+ * they are pushed via .push() to the ABSOLUTE END of:
+ * - Their own company's direct queue (sorteio_order = max within same agency + 1)
+ * - The unified inverse queue (inverse_order = max across ALL brokers + 1)
  *
- * Both queues have independent numbering and are decoupled after the sorteio.
+ * The three queues remain fully isolated — pushing to one never reorders another.
  */
 export async function pushLateBrokerToQueues(brokerId: string, brokers: Broker[]): Promise<void> {
   const broker = brokers.find((b) => b.id === brokerId);
   if (!broker) return;
 
-  const allDirect = brokers.filter((b) => !b.is_external_partner && b.sorteio_order != null);
-  const maxDirect = allDirect.length > 0 ? Math.max(...allDirect.map((b) => b.sorteio_order ?? 0)) : 0;
+  // Direct queue: push to end within the same agency
+  const sameAgencyDirect = brokers.filter((b) => !b.is_external_partner && b.agency === broker.agency && b.sorteio_order != null);
+  const maxDirect = sameAgencyDirect.length > 0 ? Math.max(...sameAgencyDirect.map((b) => b.sorteio_order ?? 0)) : 0;
 
+  // Inverse queue: push to end across ALL brokers (independent global numbering)
   const allInverse = brokers.filter((b) => !b.is_external_partner && b.inverse_order != null);
   const maxInverse = allInverse.length > 0 ? Math.max(...allInverse.map((b) => b.inverse_order ?? 0)) : 0;
 
@@ -561,18 +523,6 @@ export async function pushLateBrokerToQueues(brokerId: string, brokers: Broker[]
     .eq('id', brokerId);
 }
 
-/**
- * Hierarchical Transbordo for Indicação (Rule 2):
- * 1. Try the named broker if present and free.
- * 2. If absent, try someone from the SAME AGENCY who is present and free.
- *    (same agency = same team/gerente)
- * 3. If no one from same agency is available, try the OTHER agency
- *    (same diretoria = both agencies belong to the same corporate entity).
- * 4. Only after exhausting all corporate instances, fall back to the LAST
- *    available broker of the referred broker's agency (consome a vez normal).
- *
- * Returns the broker and whether the vez is consumed.
- */
 export function resolveIndicacaoBroker(
   brokers: Broker[],
   referredBrokerId: string | null,
@@ -587,25 +537,21 @@ export function resolveIndicacaoBroker(
     return { broker: undefined, consumesVez: true, source: 'last_of_agency' };
   }
 
-  // Step 1: Named broker is present and free (apenas_indicacao brokers CAN receive their own indicação)
   if (referred.presence_status === 'presente' && (referred.attendance_status === 'livre' || referred.attendance_status === 'apenas_indicacao') && !excludeIds.has(referred.id)) {
     return { broker: referred, consumesVez: false, source: 'named' };
   }
 
-  // Step 2: Same agency (same team/gerente) — first available
   const sameAgency = nextBrokerFromAgency(brokers, referred.agency, excludeIds);
   if (sameAgency) {
     return { broker: sameAgency, consumesVez: true, source: 'same_agency' };
   }
 
-  // Step 3: Other agency (same diretoria)
   const otherAgency: Agency = referred.agency === 'Viva Imóveis' ? 'Casa Nobre' : 'Viva Imóveis';
   const otherAgencyBroker = nextBrokerFromAgency(brokers, otherAgency, excludeIds);
   if (otherAgencyBroker) {
     return { broker: otherAgencyBroker, consumesVez: true, source: 'other_agency' };
   }
 
-  // Step 4: Last available broker of referred broker's agency (consome vez normal)
   const lastBroker = lastBrokerFromAgency(brokers, referred.agency, excludeIds);
   return { broker: lastBroker, consumesVez: true, source: 'last_of_agency' };
 }
@@ -613,7 +559,8 @@ export function resolveIndicacaoBroker(
 /**
  * Unified dispatch: picks the next broker for any queue type based on the current dispatch mode.
  * - Pre-sorteio (arrival): Vez Geral uses arrival order, Decorado uses inverse arrival order.
- * - Pós-sorteio: Vez Geral uses intercalation, Decorado uses inverse sorteio.
+ * - Pós-sorteio: Vez Geral uses rotation pointer → top of that company's direct queue.
+ *   Decorado uses top of the isolated inverse queue (regardless of brand).
  * - Indicação: uses hierarchical transbordo.
  */
 export function dispatchBroker(
@@ -626,7 +573,6 @@ export function dispatchBroker(
 ): { broker: Broker | undefined; agency: Agency; consumesVez: boolean } {
   const isPreSorteio = isArrivalOrderDispatchActive(simSeconds);
 
-  // Indicação always uses hierarchical transbordo regardless of time
   if (referredBrokerId) {
     const result = resolveIndicacaoBroker(brokers, referredBrokerId, excludeIds);
     return {
@@ -649,40 +595,52 @@ export function dispatchBroker(
     return { broker, agency: broker?.agency ?? 'Viva Imóveis', consumesVez: true };
   }
 
-  // Geral
   if (isPreSorteio) {
     const broker = nextBrokerByArrivalAnyAgency(brokers, excludeIds);
     return { broker, agency: broker?.agency ?? 'Viva Imóveis', consumesVez: true };
   }
 
-  // Pós-sorteio: intercalation
   const { broker, agency } = nextBrokerForGeneralQueue(brokers, lastCalledAgency, excludeIds);
   return { broker, agency, consumesVez: true };
 }
 
 /**
- * Move broker to end of BOTH queues independently:
- * - Direct queue: sorteio_order = max(sorteio_order) + 1 among same-agency brokers
- * - Inverse queue: inverse_order = max(inverse_order) + 1 among ALL brokers (both agencies)
+ * LIVE FIFO RE-ENTRY for direct queue:
+ * When a broker completes a regular "Vez Geral" first visit, they are pushed
+ * to the ABSOLUTE END of their own company's direct queue.
+ * - sorteio_order = max(sorteio_order within same agency) + 1
  *
- * The two queues are decoupled — each walks forward at its own pace.
+ * This NEVER touches the inverse queue — the queues are fully isolated.
  */
-export async function moveBrokerToEndOfQueue(brokerId: string, brokers: Broker[]): Promise<void> {
+export async function moveBrokerToEndOfDirectQueue(brokerId: string, brokers: Broker[]): Promise<void> {
   const broker = brokers.find((b) => b.id === brokerId);
   if (!broker) return;
 
-  // Direct queue: move to end within the same agency
   const sameAgencyDirect = brokers.filter((b) => !b.is_external_partner && b.agency === broker.agency && b.sorteio_order != null);
   const maxDirect = sameAgencyDirect.length > 0 ? Math.max(...sameAgencyDirect.map((b) => b.sorteio_order ?? 0)) : 0;
 
-  // Inverse queue: move to end across ALL brokers (independent numbering)
+  await supabase
+    .from('brokers')
+    .update({
+      sorteio_order: maxDirect + 1,
+      last_status_update: new Date().toISOString(),
+    })
+    .eq('id', brokerId);
+}
+
+/**
+ * DECORADO RE-ENTRY for inverse queue:
+ * Upon completing a Decorado attendance, the broker is pushed to the
+ * ABSOLUTE END of the inverse_queue_general — independently from the direct queues.
+ * - inverse_order = max(inverse_order across ALL brokers) + 1
+ */
+export async function moveBrokerToEndOfInverseQueue(brokerId: string, brokers: Broker[]): Promise<void> {
   const allInverse = brokers.filter((b) => !b.is_external_partner && b.inverse_order != null);
   const maxInverse = allInverse.length > 0 ? Math.max(...allInverse.map((b) => b.inverse_order ?? 0)) : 0;
 
   await supabase
     .from('brokers')
     .update({
-      sorteio_order: maxDirect + 1,
       inverse_order: maxInverse + 1,
       last_status_update: new Date().toISOString(),
     })
@@ -690,12 +648,20 @@ export async function moveBrokerToEndOfQueue(brokerId: string, brokers: Broker[]
 }
 
 /**
- * Visita ao Decorado: picks the first available broker from the TOP of the
- * INVERSE queue. The inverse queue has its own independent numbering
- * (inverse_order: 1, 2, 3...) assigned at sorteio time and maintained
- * independently from the direct queue.
- * Late brokers are at the end (highest inverse_order).
- * Excludes brokers currently busy (calling, em_atendimento).
+ * Legacy alias — moves broker to end of direct queue only (does NOT touch inverse queue).
+ * Kept for backward compatibility with callers that don't distinguish queue types.
+ */
+export async function moveBrokerToEndOfQueue(brokerId: string, brokers: Broker[]): Promise<void> {
+  await moveBrokerToEndOfDirectQueue(brokerId, brokers);
+}
+
+/**
+ * Visita ao Decorado: strictly dispatches the broker at the CURRENT TOP
+ * (index 0) of the isolated inverse_queue_general, regardless of their
+ * brand or who is next in the direct queues.
+ *
+ * The inverse queue has its own independent numbering (inverse_order: 1, 2, 3...)
+ * assigned at sorteio time and maintained independently from the direct queues.
  */
 export function nextBrokerFromInverseTop(brokers: Broker[], excludeIds: Set<string>): Broker | undefined {
   const present = brokers.filter(
@@ -707,28 +673,19 @@ export function nextBrokerFromInverseTop(brokers: Broker[], excludeIds: Set<stri
     .filter((b) => b.inverse_order != null)
     .sort((a, b) => (a.inverse_order ?? 999_999) - (b.inverse_order ?? 999_999));
 
-  // Brokers without inverse_order (e.g. late check-ins that haven't been pushed yet)
-  // go to the absolute end
+  // Brokers without inverse_order go to the absolute end
   const noOrder = present.filter((b) => b.inverse_order == null);
   const fullQueue: Broker[] = [...sorted];
   for (const b of noOrder) fullQueue.push(b);
 
-  // Agency turn: determined by the top of the inverse queue
+  // Strictly return the broker at index 0 if they are Livre
   const topBroker = fullQueue[0];
   if (!topBroker) return undefined;
-  const targetAgency = topBroker.agency;
 
-  // Find first Livre broker from that agency
-  const sameAgency = fullQueue.find(
-    (b) => b.agency === targetAgency && b.attendance_status === 'livre',
-  );
-  if (sameAgency) return sameAgency;
+  if (topBroker.attendance_status === 'livre') return topBroker;
 
-  // Caos: no Livre from that agency → transbord to the other
-  const otherAgency: Agency = targetAgency === 'Viva Imóveis' ? 'Casa Nobre' : 'Viva Imóveis';
-  return fullQueue.find(
-    (b) => b.agency === otherAgency && b.attendance_status === 'livre',
-  );
+  // Top broker is busy — find next Livre in the inverse queue (regardless of brand)
+  return fullQueue.find((b) => b.attendance_status === 'livre');
 }
 
 export function nextBrokerFromInverseQueue(brokers: Broker[], sortedQueue: QueueEntry[]): Broker | undefined {

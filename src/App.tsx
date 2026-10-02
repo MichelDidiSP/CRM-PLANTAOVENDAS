@@ -346,6 +346,19 @@ function AppContent() {
   );
 }
 
+function brokerStatusBadge(b: Broker): { label: string; color: string } {
+  if (b.presence_status === 'pausa') return { label: 'Pausado', color: 'bg-red-500/15 text-red-400' };
+  switch (b.attendance_status) {
+    case 'livre': return { label: 'Livre', color: 'bg-emerald-500/15 text-emerald-400' };
+    case 'em_mesa': return { label: 'Chamado', color: 'bg-amber-500/15 text-amber-400' };
+    case 'em_atendimento': return { label: 'Em Atendimento', color: 'bg-sky-500/15 text-sky-400' };
+    case 'decorado': return { label: 'Decorado', color: 'bg-indigo-500/15 text-indigo-400' };
+    case 'encerrado': return { label: 'Encerrado', color: 'bg-slate-600/30 text-slate-400' };
+    case 'apenas_indicacao': return { label: 'Apenas Indicação', color: 'bg-purple-500/15 text-purple-400' };
+    default: return { label: b.attendance_status, color: 'bg-slate-600/30 text-slate-400' };
+  }
+}
+
 function AuditoriaPanel({ sorteioResult, brokers, queue, attendanceReport }: {
   sorteioResult: SorteioResult | null;
   brokers: Broker[];
@@ -457,13 +470,14 @@ function AuditoriaPanel({ sorteioResult, brokers, queue, attendanceReport }: {
                 <tbody>
                   {attendanceReport.map((entry, i) => {
                     const broker = entry.broker_id ? brokers.find((b) => b.id === entry.broker_id) : undefined;
+                    const reportAgency = broker?.agency ?? entry.agency;
                     return (
                       <tr key={entry.id} className="border-b border-slate-800/50">
                         <td className="py-2.5 px-3 text-slate-500 font-mono">{i + 1}</td>
                         <td className="py-2.5 px-3 text-white font-medium">{entry.visit?.customer_name ?? '—'}</td>
                         <td className="py-2.5 px-3 text-slate-300">{broker?.operational_name ?? '—'}</td>
                         <td className="py-2.5 px-3">
-                          <span className={`text-xs px-2 py-0.5 rounded-full ${entry.agency === 'Viva Imóveis' ? 'bg-amber-500/15 text-amber-400' : entry.agency === 'Casa Nobre' ? 'bg-sky-500/15 text-sky-400' : 'bg-slate-600/30 text-slate-400'}`}>{entry.agency}</span>
+                          <span className={`text-xs px-2 py-0.5 rounded-full ${reportAgency === 'Viva Imóveis' ? 'bg-amber-500/15 text-amber-400' : reportAgency === 'Casa Nobre' ? 'bg-sky-500/15 text-sky-400' : 'bg-slate-600/30 text-slate-400'}`}>{reportAgency}</span>
                         </td>
                         <td className="py-2.5 px-3 text-slate-400">{entry.visit?.visit_reason ?? '—'}</td>
                       </tr>
@@ -507,46 +521,73 @@ function AuditoriaPanel({ sorteioResult, brokers, queue, attendanceReport }: {
         </div>
       </div>
 
-      {/* DUAS FILAS INDEPENDENTES — Tempo Real */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Tabela 1: Fila Geral Direta */}
+      {/* TRÊS FILAS ISOLADAS — Tempo Real */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Tabela 1: Fila Direta — Empresa A (Viva) */}
         <div className="bg-slate-900 rounded-2xl border border-amber-500/20 p-6">
           <div className="flex items-center gap-3 mb-5">
             <div className="bg-amber-500/10 p-3 rounded-xl"><ListOrdered className="h-6 w-6 text-amber-400" /></div>
             <div>
-              <h2 className="text-xl font-bold text-amber-400">Fila Geral Direta</h2>
-              <p className="text-sm text-slate-400">Vez Geral / Primeira Visita</p>
+              <h2 className="text-xl font-bold text-amber-400">Fila Direta — Empresa A</h2>
+              <p className="text-sm text-slate-400">Viva Imóveis · Vez Geral</p>
             </div>
           </div>
           <div className="space-y-2">
             {[...brokers]
-              .filter((b) => !b.is_external_partner && b.presence_status === 'presente')
+              .filter((b) => !b.is_external_partner && b.agency === 'Viva Imóveis' && b.presence_status === 'presente')
               .sort((a, b) => (a.sorteio_order ?? 999) - (b.sorteio_order ?? 999))
               .map((b, i) => {
-                const statusLabel = b.attendance_status === 'em_mesa' ? 'Chamado' : b.attendance_status === 'livre' ? 'Livre' : b.attendance_status === 'decorado' ? 'Em Atendimento' : b.presence_status === 'pausa' ? 'Pausado' : b.attendance_status;
-                const statusColor = b.attendance_status === 'livre' ? 'bg-emerald-500/15 text-emerald-400' : b.attendance_status === 'em_mesa' ? 'bg-amber-500/15 text-amber-400' : b.attendance_status === 'decorado' ? 'bg-sky-500/15 text-sky-400' : b.presence_status === 'pausa' ? 'bg-red-500/15 text-red-400' : 'bg-slate-600/30 text-slate-400';
+                const { label, color } = brokerStatusBadge(b);
                 return (
                   <div key={b.id} className="flex items-center gap-3 bg-slate-800/50 rounded-lg p-3 border border-amber-500/10">
                     <span className="font-mono text-sm text-amber-400/60 w-8 text-center font-bold">{i + 1}.</span>
                     <span className="text-white text-sm font-medium flex-1">{b.operational_name}</span>
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${b.agency === 'Viva Imóveis' ? 'bg-amber-500/15 text-amber-400' : 'bg-sky-500/15 text-sky-400'}`}>{b.agency}</span>
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${statusColor}`}>{statusLabel}</span>
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${color}`}>{label}</span>
                   </div>
                 );
               })}
-            {brokers.filter((b) => !b.is_external_partner && b.presence_status === 'presente').length === 0 && (
+            {brokers.filter((b) => !b.is_external_partner && b.agency === 'Viva Imóveis' && b.presence_status === 'presente').length === 0 && (
               <p className="text-sm text-slate-500 text-center py-6">Nenhum corretor presente.</p>
             )}
           </div>
         </div>
 
-        {/* Tabela 2: Fila Inversa Geral */}
+        {/* Tabela 2: Fila Direta — Empresa B (Nobre) */}
+        <div className="bg-slate-900 rounded-2xl border border-sky-500/20 p-6">
+          <div className="flex items-center gap-3 mb-5">
+            <div className="bg-sky-500/10 p-3 rounded-xl"><ListOrdered className="h-6 w-6 text-sky-400" /></div>
+            <div>
+              <h2 className="text-xl font-bold text-sky-400">Fila Direta — Empresa B</h2>
+              <p className="text-sm text-slate-400">Casa Nobre · Vez Geral</p>
+            </div>
+          </div>
+          <div className="space-y-2">
+            {[...brokers]
+              .filter((b) => !b.is_external_partner && b.agency === 'Casa Nobre' && b.presence_status === 'presente')
+              .sort((a, b) => (a.sorteio_order ?? 999) - (b.sorteio_order ?? 999))
+              .map((b, i) => {
+                const { label, color } = brokerStatusBadge(b);
+                return (
+                  <div key={b.id} className="flex items-center gap-3 bg-slate-800/50 rounded-lg p-3 border border-sky-500/10">
+                    <span className="font-mono text-sm text-sky-400/60 w-8 text-center font-bold">{i + 1}.</span>
+                    <span className="text-white text-sm font-medium flex-1">{b.operational_name}</span>
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${color}`}>{label}</span>
+                  </div>
+                );
+              })}
+            {brokers.filter((b) => !b.is_external_partner && b.agency === 'Casa Nobre' && b.presence_status === 'presente').length === 0 && (
+              <p className="text-sm text-slate-500 text-center py-6">Nenhum corretor presente.</p>
+            )}
+          </div>
+        </div>
+
+        {/* Tabela 3: Fila Inversa Geral (Decorado) */}
         <div className="bg-slate-900 rounded-2xl border border-orange-500/20 p-6">
           <div className="flex items-center gap-3 mb-5">
             <div className="bg-orange-500/10 p-3 rounded-xl"><Home className="h-6 w-6 text-orange-400" /></div>
             <div>
               <h2 className="text-xl font-bold text-orange-400">Fila Inversa Geral</h2>
-              <p className="text-sm text-slate-400">Visita ao Decorado</p>
+              <p className="text-sm text-slate-400">Decorado · Índice independente</p>
             </div>
           </div>
           <div className="space-y-2">
@@ -554,14 +595,13 @@ function AuditoriaPanel({ sorteioResult, brokers, queue, attendanceReport }: {
               .filter((b) => !b.is_external_partner && b.presence_status === 'presente')
               .sort((a, b) => (a.inverse_order ?? 999_999) - (b.inverse_order ?? 999_999))
               .map((b, i) => {
-                const statusLabel = b.attendance_status === 'em_mesa' ? 'Chamado' : b.attendance_status === 'livre' ? 'Livre' : b.attendance_status === 'decorado' ? 'Em Atendimento' : b.presence_status === 'pausa' ? 'Pausado' : b.attendance_status;
-                const statusColor = b.attendance_status === 'livre' ? 'bg-emerald-500/15 text-emerald-400' : b.attendance_status === 'em_mesa' ? 'bg-amber-500/15 text-amber-400' : b.attendance_status === 'decorado' ? 'bg-sky-500/15 text-sky-400' : b.presence_status === 'pausa' ? 'bg-red-500/15 text-red-400' : 'bg-slate-600/30 text-slate-400';
+                const { label, color } = brokerStatusBadge(b);
                 return (
                   <div key={b.id} className="flex items-center gap-3 bg-slate-800/50 rounded-lg p-3 border border-orange-500/10">
                     <span className="font-mono text-sm text-orange-400/60 w-8 text-center font-bold">{i + 1}.</span>
                     <span className="text-white text-sm font-medium flex-1">{b.operational_name}</span>
                     <span className={`text-xs px-2 py-0.5 rounded-full ${b.agency === 'Viva Imóveis' ? 'bg-amber-500/15 text-amber-400' : 'bg-sky-500/15 text-sky-400'}`}>{b.agency}</span>
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${statusColor}`}>{statusLabel}</span>
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${color}`}>{label}</span>
                   </div>
                 );
               })}
