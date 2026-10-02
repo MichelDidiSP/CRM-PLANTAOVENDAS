@@ -1,7 +1,23 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useMemo } from 'react';
 import { UserPlus, Phone, TriangleAlert as AlertTriangle, CircleCheck as CheckCircle2, Clock, Search, EyeOff, Eye, Zap, UserCheck, UserX, Building2, Trash2 } from 'lucide-react';
 import { supabase, type Broker, type Visit, type VisitReason, type Agency } from '@/lib/supabase';
-import { REASONS, QUICK_REASONS, sanitizePhone, formatPhoneDisplay, lastBrokerFromAgency, nextBrokerFromAgency, nextBrokerByArrival, nextBrokerFromInverseTop, nextBrokerByArrivalAnyAgency, nextBrokerByArrivalInverse, nextBrokerForGeneralQueue, dispatchBroker, isArrivalOrderDispatchActive } from '@/lib/queueEngine';
+import {
+  REASONS,
+  QUICK_REASONS,
+  sanitizePhone,
+  formatPhoneDisplay,
+  lastBrokerFromAgency,
+  lastBrokerFromTeam,
+  nextBrokerByArrival,
+  nextBrokerFromInverseTop,
+  nextBrokerByArrivalAnyAgency,
+  nextBrokerByArrivalInverse,
+  nextBrokerForGeneralQueue,
+  resolveIndicacaoBroker,
+  resolveApenasImobiliariaBroker,
+  dispatchBroker,
+  isArrivalOrderDispatchActive,
+} from '@/lib/queueEngine';
 import { useSim } from '@/lib/simContext';
 
 type QuickReason = VisitReason;
@@ -21,6 +37,14 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
   const [searchPhone, setSearchPhone] = useState('');
   const [revealed, setRevealed] = useState(false);
   const { currentShift, isPreSorteio, simSeconds, getCurrentTime } = useSim();
+
+  // Predictive search state
+  const [brokerSearch, setBrokerSearch] = useState('');
+  const [showResults, setShowResults] = useState(false);
+  const [selectedBroker, setSelectedBroker] = useState<Broker | null>(null);
+
+  // Apenas Imobiliária company picker
+  const [apenasImobiliariaAgency, setApenasImobiliariaAgency] = useState<Agency>('Viva Imóveis');
 
   // Quick entry state
   const [quickReason, setQuickReason] = useState<QuickReason>('Primeira visita');
@@ -50,11 +74,21 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
     (b) => !b.is_external_partner,
   );
 
+  // Predictive search results — scans ALL internal brokers (present + absent + external team)
+  const searchResults = useMemo(() => {
+    if (!brokerSearch.trim() || brokerSearch.trim().length < 2) return [];
+    const query = brokerSearch.toLowerCase().trim();
+    return allInternalBrokers
+      .filter((b) => b.operational_name.toLowerCase().includes(query))
+      .slice(0, 8);
+  }, [brokerSearch, allInternalBrokers]);
+
   const normalizedPhone = sanitizePhone(phone);
   const duplicate = visits.find((v) => v.phone === normalizedPhone && v.status !== 'encerrado' && normalizedPhone.length > 0);
 
   const isParceria = reason === 'Parceria';
   const isDecorado = reason === 'Visita ao Decorado';
+  const isIndicacaoForm = reason === 'Indicação';
 
   const partnerBrokers = brokers.filter((b) => b.is_external_partner);
 
@@ -67,6 +101,23 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
     setRevealed(false);
     setMessage(null);
     setReferredBrokerId('');
+    setBrokerSearch('');
+    setSelectedBroker(null);
+    setShowResults(false);
+  }
+
+  function selectBroker(broker: Broker) {
+    setSelectedBroker(broker);
+    setReferredBrokerId(broker.id);
+    setBrokerSearch(broker.operational_name);
+    setShowResults(false);
+  }
+
+  function clearBrokerSearch() {
+    setBrokerSearch('');
+    setSelectedBroker(null);
+    setReferredBrokerId('');
+    setShowResults(false);
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -91,8 +142,6 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
     const simTimestamp = getCurrentTime().toISOString();
     const queueType = isParceria ? 'parceria' : isDecorado ? 'decorado' : 'geral';
 
-    // Agency is hidden from reception — determined by system rules
-    // For Parceria: Externo; for Decorado: system picks from inverse queue; for Geral: system alternates
     const entryAgency: Agency = isParceria ? 'Externo' : 'Viva Imóveis';
 
     const { data: visitData, error: visitError } = await supabase
@@ -138,6 +187,8 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
       setCustomerName('');
       setPhone('');
       setReferredBrokerId('');
+      setBrokerSearch('');
+      setSelectedBroker(null);
     }
     setSubmitting(false);
   }
@@ -156,11 +207,8 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
     const isDecoradoQuick = quickReason === 'Visita ao Decorado';
     const queueType = isParceriaQuick ? 'parceria' : isDecoradoQuick ? 'decorado' : 'geral';
 
-    // Determine referred broker and visit reason for DB
     let referredBrokerId: string | null = null;
     let dbVisitReason: VisitReason = quickReason;
-
-    // Determine which agency the referred broker belongs to (for Rule 2)
     let targetAgency: Agency = 'Viva Imóveis';
 
     if (isIndicacaoPresente) {
@@ -175,10 +223,9 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
       if (refBroker) targetAgency = refBroker.agency;
     } else if (isIndicacaoImobiliaria) {
       dbVisitReason = 'Indicação';
+      targetAgency = apenasImobiliariaAgency;
     }
 
-    // Entry agency: for parceria it's Externo; for indicacao use the referred broker's agency;
-    // for geral/decorado the system will determine at call time
     const entryAgency: Agency = isParceriaQuick ? 'Externo' : targetAgency;
 
     const { data: visitData, error: visitError } = await supabase
@@ -199,29 +246,33 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
       return;
     }
 
-    // Determine broker assignment for the queue entry
     let assignedBrokerId: string | null = null;
+    let isProtectedPosition = false;
     const busyIds = new Set<string>(
-      brokers.filter((b) => b.attendance_status === 'em_mesa' || b.attendance_status === 'decorado').map((b) => b.id),
+      brokers.filter((b) => b.attendance_status === 'em_mesa' || b.attendance_status === 'decorado' || b.attendance_status === 'em_atendimento').map((b) => b.id),
     );
 
     if (isIndicacaoPresente) {
-      // Rule 5: goes directly to the referred broker, does NOT consume their vez
       const referred = brokers.find((b) => b.id === quickBrokerId);
       if (referred && referred.presence_status === 'presente' && (referred.attendance_status === 'livre' || referred.attendance_status === 'apenas_indicacao')) {
         assignedBrokerId = referred.id;
+        isProtectedPosition = true;
+      } else {
+        // Broker is busy → hierarchical team overflow
+        const result = resolveIndicacaoBroker(brokers, quickBrokerId || null, busyIds);
+        assignedBrokerId = result.broker?.id ?? null;
+        isProtectedPosition = result.protectedPosition;
       }
     } else if (isIndicacaoAusente) {
-      // Rule 6: referred broker is absent → LAST available broker of same agency
-      const lastBroker = lastBrokerFromAgency(brokers, targetAgency, busyIds);
-      assignedBrokerId = lastBroker?.id ?? null;
+      // Referred broker is absent → hierarchical team overflow
+      const result = resolveIndicacaoBroker(brokers, quickBrokerId || null, busyIds);
+      assignedBrokerId = result.broker?.id ?? null;
+      isProtectedPosition = result.protectedPosition;
     } else if (isIndicacaoImobiliaria) {
-      // Rule: only knows agency → last available broker of that agency
-      // Since reception can't pick agency, default to Viva for quick test
-      const lastBroker = lastBrokerFromAgency(brokers, 'Viva Imóveis', busyIds);
-      assignedBrokerId = lastBroker?.id ?? null;
+      // Apenas Imobiliária → last available broker of selected company, consumes vez
+      const result = resolveApenasImobiliariaBroker(brokers, apenasImobiliariaAgency, busyIds);
+      assignedBrokerId = result.broker?.id ?? null;
     } else if (isDecoradoQuick) {
-      // Decorado: pre-sorteio uses inverse arrival order; post-sorteio uses inverse sorteio
       if (isArrivalOrderDispatchActive(simSeconds)) {
         const broker = nextBrokerByArrivalInverse(brokers, busyIds);
         assignedBrokerId = broker?.id ?? null;
@@ -230,8 +281,6 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
         assignedBrokerId = broker?.id ?? null;
       }
     } else if (!isParceriaQuick) {
-      // Geral: pre-sorteio uses pure arrival order across all agencies;
-      // post-sorteio scans the intercalated queue top-to-bottom for first 'Livre' broker
       if (isArrivalOrderDispatchActive(simSeconds)) {
         const broker = nextBrokerByArrivalAnyAgency(brokers, busyIds);
         assignedBrokerId = broker?.id ?? null;
@@ -329,7 +378,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
                   <option value="">Selecione um corretor…</option>
                   {(isIndicacaoPresente ? presentBrokers : allInternalBrokers.filter((b) => b.presence_status === 'ausente')).map((b) => (
                     <option key={b.id} value={b.id}>
-                      {b.operational_name} ({b.agency}) {b.presence_status === 'presente' ? '· Presente' : '· Ausente'}{b.attendance_status === 'apenas_indicacao' ? ' · Apenas Indicação' : ''}
+                      {b.operational_name} ({b.agency}) · {b.equipe} {b.presence_status === 'presente' ? '· Presente' : '· Ausente'}{b.attendance_status === 'apenas_indicacao' ? ' · Apenas Indicação' : ''}
                     </option>
                   ))}
                 </select>
@@ -339,6 +388,20 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
                 {isIndicacaoAusente && allInternalBrokers.filter((b) => b.presence_status === 'ausente').length === 0 && (
                   <p className="text-xs text-slate-500 mt-1">Nenhum corretor ausente para indicar.</p>
                 )}
+              </div>
+            )}
+
+            {isIndicacaoImobiliaria && (
+              <div className="min-w-[200px]">
+                <label className="block text-xs text-slate-400 mb-1">Imobiliária responsável</label>
+                <select
+                  value={apenasImobiliariaAgency}
+                  onChange={(e) => setApenasImobiliariaAgency(e.target.value as Agency)}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                >
+                  <option value="Viva Imóveis">Viva Imóveis (Empresa A)</option>
+                  <option value="Casa Nobre">Casa Nobre (Empresa B)</option>
+                </select>
               </div>
             )}
 
@@ -364,13 +427,13 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
               {isIndicacaoAusente && (
                 <span className="flex items-center gap-1.5 text-xs bg-orange-500/10 text-orange-400 px-3 py-1.5 rounded-lg">
                   <UserX className="h-3.5 w-3.5" />
-                  Regra 6: Corretor ausente → último disponível da mesma imobiliária. Consome a vez.
+                  Hierarquia: Mesma Equipe → Mesma Empresa. Posição protegida (Indicação Dividida 50/50).
                 </span>
               )}
               {isIndicacaoImobiliaria && (
                 <span className="flex items-center gap-1.5 text-xs bg-sky-500/10 text-sky-400 px-3 py-1.5 rounded-lg">
                   <Building2 className="h-3.5 w-3.5" />
-                  Regra: Só a marca → último disponível da imobiliária. Consome a vez.
+                  Só a marca: último disponível da imobiliária. 100% comissão para o atendente.
                 </span>
               )}
             </div>
@@ -469,8 +532,6 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
               </select>
             </div>
 
-            {/* NO AGENCY SELECTOR — completely hidden from reception */}
-
             {isParceria && (
               <div className="bg-sky-500/5 border border-sky-500/20 rounded-xl p-4 space-y-3">
                 <p className="text-sm text-sky-400">
@@ -509,7 +570,127 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
               </div>
             )}
 
-            {(reason === 'Indicação' || reason === 'Retorno') && !isParceria && !isDecorado && (
+            {/* PREDICTIVE AUTOCOMPLETE SEARCH for Indicação */}
+            {isIndicacaoForm && !isParceria && !isDecorado && (
+              <div className="bg-slate-800/40 border border-amber-500/20 rounded-xl p-4 space-y-3">
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">
+                  Buscar corretor indicante (digite o nome)
+                </label>
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-500" />
+                  <input
+                    type="text"
+                    value={brokerSearch}
+                    onChange={(e) => {
+                      setBrokerSearch(e.target.value);
+                      setShowResults(true);
+                      setSelectedBroker(null);
+                      setReferredBrokerId('');
+                    }}
+                    onFocus={() => setShowResults(true)}
+                    onBlur={() => setTimeout(() => setShowResults(false), 200)}
+                    placeholder="Digite o nome do corretor…"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl pl-10 pr-10 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-amber-500 transition"
+                  />
+                  {brokerSearch && (
+                    <button
+                      type="button"
+                      onClick={clearBrokerSearch}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  )}
+
+                  {/* Autocomplete dropdown */}
+                  {showResults && searchResults.length > 0 && (
+                    <div className="absolute z-20 mt-1 w-full bg-slate-800 border border-slate-600 rounded-xl shadow-xl max-h-[280px] overflow-y-auto">
+                      {searchResults.map((b) => (
+                        <button
+                          key={b.id}
+                          type="button"
+                          onMouseDown={() => selectBroker(b)}
+                          className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-slate-700/50 transition text-left border-b border-slate-700/30 last:border-0"
+                        >
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-white text-sm font-medium truncate">{b.operational_name}</span>
+                              <span className={`text-xs px-1.5 py-0.5 rounded-full shrink-0 ${b.presence_status === 'presente' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-red-500/15 text-red-400'}`}>
+                                {b.presence_status === 'presente' ? 'Presente' : 'Ausente'}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-2 mt-0.5 text-xs text-slate-400">
+                              <span className={`px-1.5 py-0.5 rounded-full ${b.agency === 'Viva Imóveis' ? 'bg-amber-500/10 text-amber-400' : 'bg-sky-500/10 text-sky-400'}`}>{b.agency}</span>
+                              <span>Equipe: {b.equipe}</span>
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {showResults && brokerSearch.length >= 2 && searchResults.length === 0 && (
+                    <div className="absolute z-20 mt-1 w-full bg-slate-800 border border-slate-600 rounded-xl shadow-xl p-4">
+                      <p className="text-sm text-slate-400 mb-2">Nenhum corretor encontrado com esse nome.</p>
+                      <p className="text-xs text-slate-500">
+                        Use a opção "Apenas Imobiliária" no Simular Entrada Rápida para selecionar apenas a empresa responsável.
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Selected broker card with real-time status */}
+                {selectedBroker && (
+                  <div className="bg-slate-900/60 border border-slate-700 rounded-lg p-3 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="text-white text-sm font-medium">{selectedBroker.operational_name}</span>
+                        <span className={`text-xs px-2 py-0.5 rounded-full ${selectedBroker.agency === 'Viva Imóveis' ? 'bg-amber-500/15 text-amber-400' : 'bg-sky-500/15 text-sky-400'}`}>
+                          {selectedBroker.agency}
+                        </span>
+                        <span className="text-xs text-slate-400">Equipe: {selectedBroker.equipe}</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 flex-wrap text-xs">
+                      {selectedBroker.presence_status === 'presente' ? (
+                        <>
+                          <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400">Presente</span>
+                          {selectedBroker.attendance_status === 'livre' && (
+                            <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400">Livre — dispatch direto</span>
+                          )}
+                          {selectedBroker.attendance_status === 'em_mesa' && (
+                            <span className="px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400">Ocupado — transbordo hierárquico</span>
+                          )}
+                          {selectedBroker.attendance_status === 'em_atendimento' && (
+                            <span className="px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-400">Em Atendimento — transbordo hierárquico</span>
+                          )}
+                          {selectedBroker.attendance_status === 'apenas_indicacao' && (
+                            <span className="px-2 py-0.5 rounded-full bg-purple-500/15 text-purple-400">Apenas Indicação — dispatch direto</span>
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          <span className="px-2 py-0.5 rounded-full bg-red-500/15 text-red-400">Ausente</span>
+                          <span className="text-slate-400">
+                            Transbordo: Mesma Equipe ({selectedBroker.equipe}) → Mesma Empresa ({selectedBroker.agency})
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Apenas Imobiliária fallback */}
+                <div className="flex items-center gap-2 text-xs text-slate-500 bg-slate-800/40 rounded-lg p-2.5">
+                  <Building2 className="h-4 w-4 shrink-0" />
+                  <span>
+                    Não lembra o corretor? Use a opção <strong className="text-amber-400">"Indicação: Só a Imobiliária"</strong> no Simular Entrada Rápida acima para selecionar apenas a empresa.
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {reason === 'Retorno' && !isParceria && !isDecorado && (
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-1.5">Corretor indicante (opcional)</label>
                 <select
@@ -519,7 +700,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
                 >
                   <option value="">Sem corretor específico</option>
                   {presentBrokers.map((b) => (
-                    <option key={b.id} value={b.id}>{b.operational_name} ({b.agency})</option>
+                    <option key={b.id} value={b.id}>{b.operational_name} ({b.agency} · {b.equipe})</option>
                   ))}
                 </select>
               </div>

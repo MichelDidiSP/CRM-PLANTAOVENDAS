@@ -495,6 +495,26 @@ export function lastBrokerFromAgency(brokers: Broker[], agency: Agency, excludeI
 }
 
 /**
+ * Returns the CURRENT BOTTOM (last available) Livre broker from the SAME TEAM.
+ * Used for hierarchical indicacao overflow: 1st priority is same-team.
+ */
+export function lastBrokerFromTeam(brokers: Broker[], equipe: string, excludeIds: Set<string>): Broker | undefined {
+  const teamBrokers = brokers
+    .filter((b) => !b.is_external_partner && b.equipe === equipe && b.presence_status === 'presente' && b.attendance_status === 'livre' && !isApenasIndicacao(b) && !excludeIds.has(b.id))
+    .sort((a, b) => (b.sorteio_order ?? 0) - (a.sorteio_order ?? 0));
+
+  return teamBrokers[0];
+}
+
+/**
+ * Returns the CURRENT BOTTOM (last available) Livre broker from the SAME COMPANY (agency).
+ * Used as 2nd priority in hierarchical indicacao overflow.
+ */
+export function lastBrokerFromCompany(brokers: Broker[], agency: Agency, excludeIds: Set<string>): Broker | undefined {
+  return lastBrokerFromAgency(brokers, agency, excludeIds);
+}
+
+/**
  * Late check-in push: when a broker checks in after the sorteio (08:46h),
  * they are pushed via .push() to the ABSOLUTE END of:
  * - Their own company's direct queue (sorteio_order = max within same agency + 1)
@@ -527,33 +547,56 @@ export function resolveIndicacaoBroker(
   brokers: Broker[],
   referredBrokerId: string | null,
   excludeIds: Set<string>,
-): { broker: Broker | undefined; consumesVez: boolean; source: 'named' | 'same_agency' | 'other_agency' | 'last_of_agency' } {
+): { broker: Broker | undefined; consumesVez: boolean; source: 'named' | 'same_team' | 'same_agency' | 'other_agency' | 'last_of_agency'; equipe: string | null; protectedPosition: boolean } {
   if (!referredBrokerId) {
-    return { broker: undefined, consumesVez: true, source: 'last_of_agency' };
+    return { broker: undefined, consumesVez: true, source: 'last_of_agency', equipe: null, protectedPosition: false };
   }
 
   const referred = brokers.find((b) => b.id === referredBrokerId);
   if (!referred) {
-    return { broker: undefined, consumesVez: true, source: 'last_of_agency' };
+    return { broker: undefined, consumesVez: true, source: 'last_of_agency', equipe: null, protectedPosition: false };
   }
 
+  // Step 1: named broker is present and free → goes directly, NO vez consumed, position protected
   if (referred.presence_status === 'presente' && (referred.attendance_status === 'livre' || referred.attendance_status === 'apenas_indicacao') && !excludeIds.has(referred.id)) {
-    return { broker: referred, consumesVez: false, source: 'named' };
+    return { broker: referred, consumesVez: false, source: 'named', equipe: referred.equipe, protectedPosition: true };
   }
 
-  const sameAgency = nextBrokerFromAgency(brokers, referred.agency, excludeIds);
+  // Step 2: named broker is busy or absent → LAST available from SAME TEAM (present at project)
+  const sameTeam = lastBrokerFromTeam(brokers, referred.equipe, excludeIds);
+  if (sameTeam) {
+    return { broker: sameTeam, consumesVez: false, source: 'same_team', equipe: referred.equipe, protectedPosition: true };
+  }
+
+  // Step 3: no one from same team available → LAST available from SAME COMPANY (present at project)
+  const sameAgency = lastBrokerFromAgency(brokers, referred.agency, excludeIds);
   if (sameAgency) {
-    return { broker: sameAgency, consumesVez: true, source: 'same_agency' };
+    return { broker: sameAgency, consumesVez: false, source: 'same_agency', equipe: sameAgency.equipe, protectedPosition: true };
   }
 
+  // Step 4: no one from same company → other company
   const otherAgency: Agency = referred.agency === 'Viva Imóveis' ? 'Casa Nobre' : 'Viva Imóveis';
-  const otherAgencyBroker = nextBrokerFromAgency(brokers, otherAgency, excludeIds);
+  const otherAgencyBroker = lastBrokerFromAgency(brokers, otherAgency, excludeIds);
   if (otherAgencyBroker) {
-    return { broker: otherAgencyBroker, consumesVez: true, source: 'other_agency' };
+    return { broker: otherAgencyBroker, consumesVez: false, source: 'other_agency', equipe: otherAgencyBroker.equipe, protectedPosition: true };
   }
 
+  // Step 5: all exhausted → last of referred agency (may be undefined if all absent)
   const lastBroker = lastBrokerFromAgency(brokers, referred.agency, excludeIds);
-  return { broker: lastBroker, consumesVez: true, source: 'last_of_agency' };
+  return { broker: lastBroker, consumesVez: false, source: 'last_of_agency', equipe: referred.equipe, protectedPosition: true };
+}
+
+/**
+ * Apenas Imobiliária: client goes straight to the LAST available broker of that
+ * company's direct queue. 100% commission for the attending broker, consumes vez.
+ */
+export function resolveApenasImobiliariaBroker(
+  brokers: Broker[],
+  targetAgency: Agency,
+  excludeIds: Set<string>,
+): { broker: Broker | undefined; consumesVez: boolean } {
+  const broker = lastBrokerFromAgency(brokers, targetAgency, excludeIds);
+  return { broker, consumesVez: true };
 }
 
 /**
@@ -570,7 +613,7 @@ export function dispatchBroker(
   excludeIds: Set<string>,
   lastCalledAgency: Agency | null,
   referredBrokerId: string | null,
-): { broker: Broker | undefined; agency: Agency; consumesVez: boolean } {
+): { broker: Broker | undefined; agency: Agency; consumesVez: boolean; protectedPosition: boolean; source: string } {
   const isPreSorteio = isArrivalOrderDispatchActive(simSeconds);
 
   if (referredBrokerId) {
@@ -579,29 +622,31 @@ export function dispatchBroker(
       broker: result.broker,
       agency: result.broker?.agency ?? 'Viva Imóveis',
       consumesVez: result.consumesVez,
+      protectedPosition: result.protectedPosition,
+      source: result.source,
     };
   }
 
   if (queueType === 'parceria') {
-    return { broker: undefined, agency: 'Externo', consumesVez: false };
+    return { broker: undefined, agency: 'Externo', consumesVez: false, protectedPosition: false, source: 'parceria' };
   }
 
   if (queueType === 'decorado') {
     if (isPreSorteio) {
       const broker = nextBrokerByArrivalInverse(brokers, excludeIds);
-      return { broker, agency: broker?.agency ?? 'Viva Imóveis', consumesVez: true };
+      return { broker, agency: broker?.agency ?? 'Viva Imóveis', consumesVez: true, protectedPosition: false, source: 'decorado_arrival' };
     }
     const broker = nextBrokerFromInverseTop(brokers, excludeIds);
-    return { broker, agency: broker?.agency ?? 'Viva Imóveis', consumesVez: true };
+    return { broker, agency: broker?.agency ?? 'Viva Imóveis', consumesVez: true, protectedPosition: false, source: 'decorado_inverse' };
   }
 
   if (isPreSorteio) {
     const broker = nextBrokerByArrivalAnyAgency(brokers, excludeIds);
-    return { broker, agency: broker?.agency ?? 'Viva Imóveis', consumesVez: true };
+    return { broker, agency: broker?.agency ?? 'Viva Imóveis', consumesVez: true, protectedPosition: false, source: 'arrival' };
   }
 
   const { broker, agency } = nextBrokerForGeneralQueue(brokers, lastCalledAgency, excludeIds);
-  return { broker, agency, consumesVez: true };
+  return { broker, agency, consumesVez: true, protectedPosition: false, source: 'rotation' };
 }
 
 /**
@@ -701,6 +746,63 @@ export function nextBrokerFromInverseQueue(brokers: Broker[], sortedQueue: Queue
   return brokers.find(
     (b) => !b.is_external_partner && b.presence_status === 'presente' && b.attendance_status === 'livre' && !isApenasIndicacao(b),
   );
+}
+
+/**
+ * Afternoon queue preparation: builds three separate arrays for the afternoon shift.
+ * Called at 13:46h (afternoon draw) to structure:
+ * - queue_company_A_afternoon (Viva direct)
+ * - queue_company_B_afternoon (Nobre direct)
+ * - inverse_queue_general_afternoon (independent inverse)
+ *
+ * Morning queues continue operating until 13:59h:59s — they are NOT touched here.
+ */
+export function prepareAfternoonArrays(brokers: Broker[]): {
+  queue_company_A_afternoon: Broker[];
+  queue_company_B_afternoon: Broker[];
+  inverse_queue_general_afternoon: Broker[];
+} {
+  const afternoonBrokers = brokers.filter(
+    (b) => !b.is_external_partner && b.agency !== 'Externo' && b.shift === 'tarde' && b.presence_status === 'presente',
+  );
+
+  const viva = afternoonBrokers.filter((b) => b.agency === 'Viva Imóveis').sort((a, b) => (a.sorteio_order ?? 999) - (b.sorteio_order ?? 999));
+  const nobre = afternoonBrokers.filter((b) => b.agency === 'Casa Nobre').sort((a, b) => (a.sorteio_order ?? 999) - (b.sorteio_order ?? 999));
+  const inverse = afternoonBrokers.sort((a, b) => (a.inverse_order ?? 999_999) - (b.inverse_order ?? 999_999));
+
+  return {
+    queue_company_A_afternoon: viva,
+    queue_company_B_afternoon: nobre,
+    inverse_queue_general_afternoon: inverse,
+  };
+}
+
+/**
+ * Exports an attendance log snapshot to the relatorio_fechamento table.
+ * Called at 14:00h:00s when the afternoon shift takes command.
+ */
+export async function exportRelatorioFechamento(queue: QueueEntry[], shift: Shift): Promise<void> {
+  const completed = queue.filter((e) => e.queue_status === 'concluido');
+  const snapshotData = completed.map((e) => ({
+    id: e.id,
+    visit_id: e.visit_id,
+    broker_id: e.broker_id,
+    agency: e.agency,
+    queue_type: e.queue_type,
+    queue_status: e.queue_status,
+    shift: e.shift,
+    visit: e.visit ? {
+      customer_name: e.visit.customer_name,
+      phone: e.visit.phone,
+      visit_reason: e.visit.visit_reason,
+    } : null,
+  }));
+
+  await supabase.from('relatorio_fechamento').insert({
+    shift,
+    snapshot_data: snapshotData,
+    total_attendances: completed.length,
+  });
 }
 
 export async function fetchAll() {

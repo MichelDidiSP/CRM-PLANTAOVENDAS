@@ -35,6 +35,7 @@ function makeBroker(
     id,
     operational_name: name,
     agency,
+    equipe: 'Equipe Teste',
     presence_status: 'presente',
     attendance_status: 'livre',
     arrived_at: '2026-09-20T08:10:00.000Z',
@@ -255,35 +256,54 @@ describe('Pós-Sorteio: Three Isolated Queues (Rule 3)', () => {
 });
 
 describe('Hierarchical Transbordo for Indicação (Rule 2)', () => {
-  it('Step 1: named broker is present and free → goes to them, no vez consumed', () => {
+  it('Step 1: named broker is present and free → goes to them, no vez consumed, position protected', () => {
     const result = resolveIndicacaoBroker(allBrokers, 'v1', new Set());
     expect(result.broker?.id).toBe('v1');
     expect(result.consumesVez).toBe(false);
     expect(result.source).toBe('named');
+    expect(result.protectedPosition).toBe(true);
   });
 
-  it('Step 2: named broker absent → same agency (same team) available', () => {
+  it('Step 2: named broker absent → same team available (last of same team)', () => {
     const absentBrokers = allBrokers.map((b) =>
       b.id === 'v1' ? { ...b, presence_status: 'ausente' as const } : b,
     );
     const result = resolveIndicacaoBroker(absentBrokers, 'v1', new Set());
-    expect(result.broker?.agency).toBe('Viva Imóveis');
-    expect(result.broker?.id).toBe('v2');
-    expect(result.consumesVez).toBe(true);
-    expect(result.source).toBe('same_agency');
+    // Same team = same equipe. All Viva brokers share 'Equipe Teste' → last available of same team
+    expect(result.broker).toBeDefined();
+    expect(result.consumesVez).toBe(false);
+    expect(result.protectedPosition).toBe(true);
+    // source is 'same_team' since all Viva share the same equipe
+    expect(result.source).toBe('same_team');
   });
 
-  it('Step 3: no one from same agency → other agency (same diretoria)', () => {
+  it('Step 3: no one from same team → same company (last of same agency)', () => {
+    // Make v1's equipe unique so no one else shares it
+    const uniqueTeamBrokers = allBrokers.map((b) =>
+      b.id === 'v1' ? { ...b, equipe: 'Equipe Única' } : b,
+    );
+    const absentBrokers = uniqueTeamBrokers.map((b) =>
+      b.id === 'v1' ? { ...b, presence_status: 'ausente' as const } : b,
+    );
+    const result = resolveIndicacaoBroker(absentBrokers, 'v1', new Set());
+    expect(result.broker?.agency).toBe('Viva Imóveis');
+    expect(result.consumesVez).toBe(false);
+    expect(result.source).toBe('same_agency');
+    expect(result.protectedPosition).toBe(true);
+  });
+
+  it('Step 4: no one from same company → other agency', () => {
     const allVivaAbsent = allBrokers.map((b) =>
       b.agency === 'Viva Imóveis' ? { ...b, presence_status: 'ausente' as const } : b,
     );
     const result = resolveIndicacaoBroker(allVivaAbsent, 'v1', new Set());
     expect(result.broker?.agency).toBe('Casa Nobre');
-    expect(result.consumesVez).toBe(true);
+    expect(result.consumesVez).toBe(false);
     expect(result.source).toBe('other_agency');
+    expect(result.protectedPosition).toBe(true);
   });
 
-  it('Step 4: all corporate instances exhausted → last broker of referred agency', () => {
+  it('Step 5: all corporate instances exhausted → last broker of referred agency (undefined)', () => {
     const allVivaAbsent = allBrokers.map((b) =>
       b.agency === 'Viva Imóveis' ? { ...b, presence_status: 'ausente' as const } : b,
     );
@@ -293,12 +313,14 @@ describe('Hierarchical Transbordo for Indicação (Rule 2)', () => {
     const result = resolveIndicacaoBroker(allNobreBusy, 'v1', new Set());
     expect(result.source).toBe('last_of_agency');
     expect(result.broker).toBeUndefined();
+    expect(result.protectedPosition).toBe(true);
   });
 
   it('dispatchBroker with referredBrokerId uses transbordo', () => {
     const result = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, new Set(), null, 'v1');
     expect(result.broker?.id).toBe('v1');
     expect(result.consumesVez).toBe(false);
+    expect(result.protectedPosition).toBe(true);
   });
 });
 

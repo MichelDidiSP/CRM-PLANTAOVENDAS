@@ -10,10 +10,11 @@ function uuid(): string {
 
 function createSeedData(): Record<string, Row[]> {
   const now = new Date().toISOString();
-  const mk = (name: string, agency: string, external = false, company: string | null = null): Row => ({
+  const mk = (name: string, agency: string, equipe: string, external = false, company: string | null = null): Row => ({
     id: uuid(),
     operational_name: name,
     agency,
+    equipe,
     presence_status: 'ausente',
     attendance_status: external ? 'parceiro' : 'livre',
     arrived_at: null,
@@ -28,17 +29,45 @@ function createSeedData(): Record<string, Row[]> {
   });
   return {
     brokers: [
-      mk('João Silva', 'Viva Imóveis'),
-      mk('Maria Santos', 'Viva Imóveis'),
-      mk('Pedro Costa', 'Viva Imóveis'),
-      mk('Ana Oliveira', 'Casa Nobre'),
-      mk('Carlos Ferreira', 'Casa Nobre'),
-      mk('Beatriz Lima', 'Casa Nobre'),
-      mk('Roberto Parceiro', 'Externo', true, 'Imobiliária ABC'),
+      // Viva Imóveis — Team 1 (4 brokers, check-in enabled)
+      mk('João Silva', 'Viva Imóveis', 'Equipe Carlos'),
+      mk('Maria Santos', 'Viva Imóveis', 'Equipe Carlos'),
+      mk('Pedro Costa', 'Viva Imóveis', 'Equipe Carlos'),
+      mk('Lucas Almeida', 'Viva Imóveis', 'Equipe Carlos'),
+      // Viva Imóveis — Team 2 (4 brokers, check-in enabled)
+      mk('Fernanda Dias', 'Viva Imóveis', 'Equipe Rodrigo'),
+      mk('Rafael Souza', 'Viva Imóveis', 'Equipe Rodrigo'),
+      mk('Juliana Castro', 'Viva Imóveis', 'Equipe Rodrigo'),
+      mk('Bruno Martins', 'Viva Imóveis', 'Equipe Rodrigo'),
+      // Viva Imóveis — Team 3 (External/Non-Escalated, always ausente)
+      mk('Paulo Externo A', 'Viva Imóveis', 'Equipe Externa A'),
+      mk('Sandra Externo A', 'Viva Imóveis', 'Equipe Externa A'),
+      mk('Eduardo Externo A', 'Viva Imóveis', 'Equipe Externa A'),
+      mk('Patricia Externo A', 'Viva Imóveis', 'Equipe Externa A'),
+
+      // Casa Nobre — Team 1 (4 brokers, check-in enabled)
+      mk('Ana Oliveira', 'Casa Nobre', 'Equipe Marcos'),
+      mk('Carlos Ferreira', 'Casa Nobre', 'Equipe Marcos'),
+      mk('Beatriz Lima', 'Casa Nobre', 'Equipe Marcos'),
+      mk('Diego Ribeiro', 'Casa Nobre', 'Equipe Marcos'),
+      // Casa Nobre — Team 2 (4 brokers, check-in enabled)
+      mk('Camila Rocha', 'Casa Nobre', 'Equipe Tatiana'),
+      mk('Thiago Barros', 'Casa Nobre', 'Equipe Tatiana'),
+      mk('Larissa Mendes', 'Casa Nobre', 'Equipe Tatiana'),
+      mk('Gustavo Pinto', 'Casa Nobre', 'Equipe Tatiana'),
+      // Casa Nobre — Team 3 (External/Non-Escalated, always ausente)
+      mk('Marcelo Externo B', 'Casa Nobre', 'Equipe Externa B'),
+      mk('Vanessa Externo B', 'Casa Nobre', 'Equipe Externa B'),
+      mk('Renato Externo B', 'Casa Nobre', 'Equipe Externa B'),
+      mk('Amanda Externo B', 'Casa Nobre', 'Equipe Externa B'),
+
+      // True external partner
+      mk('Roberto Parceiro', 'Externo', 'Parcerias', true, 'Imobiliária ABC'),
     ],
     visits: [],
     queue_entries: [],
     plantao_sessions: [],
+    relatorio_fechamento: [],
   };
 }
 

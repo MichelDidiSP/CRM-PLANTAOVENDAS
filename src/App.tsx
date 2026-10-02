@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { Building2, DoorOpen, Tv, Users, ListOrdered, Zap, Clock, Plus, Shuffle, ClipboardList, RefreshCw, FileText, X, Trophy, Calendar, Sun, Moon, ArrowRight, Home, Database } from 'lucide-react';
 import { supabase, dbReady, type Broker, type QueueEntry, type Visit, type PlantaoSession } from '@/lib/supabase';
-import { fetchAll, interleaveQueue, executeSorteio, reiniciarPlantao, transitionToAfternoon, isLateForSort, type SorteioResult } from '@/lib/queueEngine';
+import { fetchAll, interleaveQueue, executeSorteio, reiniciarPlantao, transitionToAfternoon, exportRelatorioFechamento, isLateForSort, type SorteioResult } from '@/lib/queueEngine';
 import { SimProvider, useSim } from '@/lib/simContext';
 
 import RecepcaoPanel from '@/components/RecepcaoPanel';
@@ -87,15 +87,18 @@ function AppContent() {
     }
   }, [sorteioTriggered]);
 
-  // Auto-transition at 14:00h
+  // Auto-transition at 14:00h — export attendance snapshot then swap to afternoon queues
   useEffect(() => {
     if (isShiftTransition && !transitionExecutedRef.current && brokers.length > 0) {
       transitionExecutedRef.current = true;
       setTransitioning(true);
-      transitionToAfternoon(brokers).then(() => {
-        setSorteioResult(null);
-        sorteioExecutedRef.current = false;
-        load().then(() => setTransitioning(false));
+      // Export relatorio_fechamento snapshot for the morning shift before clearing
+      exportRelatorioFechamento(queue, 'manha').then(() => {
+        transitionToAfternoon(brokers).then(() => {
+          setSorteioResult(null);
+          sorteioExecutedRef.current = false;
+          load().then(() => setTransitioning(false));
+        });
       });
     }
     if (!isShiftTransition) {

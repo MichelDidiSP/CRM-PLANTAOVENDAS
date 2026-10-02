@@ -58,6 +58,7 @@ export type Broker = {
   id: string;
   operational_name: string;
   agency: Agency;
+  equipe: string;
   presence_status: BrokerPresence;
   attendance_status: AttendanceStatus;
   arrived_at: string | null;
@@ -108,4 +109,12 @@ export type PlantaoSession = {
   shift: Shift | null;
   plantao_date: string | null;
   last_called_agency: Agency | null;
+};
+
+export type RelatorioFechamento = {
+  id: string;
+  shift: Shift;
+  snapshot_data: QueueEntry[];
+  total_attendances: number;
+  created_at: string;
 };
