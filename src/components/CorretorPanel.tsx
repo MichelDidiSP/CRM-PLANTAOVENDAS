@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { UserCheck, UserX, Clock, Coffee, Table2, Chrome as Home, CircleCheck as CheckCircle, Plus, Trash2, ExternalLink, Users as Users2, Sun, Moon, Bookmark, Eye } from 'lucide-react';
 import { supabase, type Broker, type BrokerPresence, type AttendanceStatus, type Agency, type Shift } from '@/lib/supabase';
-import { AGENCIES, isLateForSort, isBeyondBarrier, pushLateBrokerToQueues } from '@/lib/queueEngine';
+import { AGENCIES, isLateForSort, isBeyondBarrier, pushLateBrokerToQueues, equipesForAgency, BARRIER_MANHA, BARRIER_TARDE } from '@/lib/queueEngine';
 import { useSim } from '@/lib/simContext';
 
 type Props = { brokers: Broker[] };
@@ -12,6 +12,7 @@ export default function CorretorPanel({ brokers }: Props) {
   const [showAddPartner, setShowAddPartner] = useState(false);
   const [newName, setNewName] = useState('');
   const [newAgency, setNewAgency] = useState<Agency>('Viva Imóveis');
+  const [newEquipe, setNewEquipe] = useState('');
   const [partnerName, setPartnerName] = useState('');
   const [partnerCompany, setPartnerCompany] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -24,29 +25,30 @@ export default function CorretorPanel({ brokers }: Props) {
   const lateCount = present.filter((b) => isLateForSort(b.arrived_at, b.shift ?? currentShift)).length;
   const reservedCount = internalBrokers.filter((b) => b.afternoon_reserved).length;
 
+  const barrierTime = currentShift === 'manha' ? '09:29:59' : '14:29:59';
+  const barrierSec = currentShift === 'manha' ? BARRIER_MANHA : BARRIER_TARDE;
+  const simSec = getCurrentTime().getHours() * 3600 + getCurrentTime().getMinutes() * 60 + getCurrentTime().getSeconds();
+  const isBarrierActive = simSec >= barrierSec;
+
   async function updatePresence(broker: Broker, status: BrokerPresence) {
     const now = getCurrentTime().toISOString();
     const updates: Partial<Broker> & { last_status_update: string } = { presence_status: status, last_status_update: now };
     if (status === 'presente' && !broker.arrived_at) {
       updates.arrived_at = now;
       updates.shift = currentShift;
-      const simSec = getCurrentTime().getHours() * 3600 + getCurrentTime().getMinutes() * 60 + getCurrentTime().getSeconds();
-      if (isBeyondBarrier(simSec, currentShift)) {
+      const checkSec = getCurrentTime().getHours() * 3600 + getCurrentTime().getMinutes() * 60 + getCurrentTime().getSeconds();
+      if (isBeyondBarrier(checkSec, currentShift)) {
         updates.attendance_status = 'apenas_indicacao';
+      } else {
+        const isLate = isLateForSort(now, currentShift);
+        if (isLate) {
+          await supabase.from('brokers').update(updates).eq('id', broker.id);
+          await pushLateBrokerToQueues(broker.id, internalBrokers);
+          return;
+        }
       }
-      // Late check-in after sorteio: push to the END of both queues independently
-      // (handled after the initial update so we have the full broker list)
     }
     await supabase.from('brokers').update(updates).eq('id', broker.id);
-
-    // If this was a late check-in (after sorteio time), push to both queues
-    if (status === 'presente' && !broker.arrived_at) {
-      const simSec = getCurrentTime().getHours() * 3600 + getCurrentTime().getMinutes() * 60 + getCurrentTime().getSeconds();
-      const isLate = isLateForSort(now, currentShift);
-      if (isLate && !isBeyondBarrier(simSec, currentShift)) {
-        await pushLateBrokerToQueues(broker.id, internalBrokers);
-      }
-    }
   }
 
   async function updateAttendance(broker: Broker, status: AttendanceStatus) {
@@ -55,10 +57,10 @@ export default function CorretorPanel({ brokers }: Props) {
 
   async function addBroker(e: React.FormEvent) {
     e.preventDefault();
-    if (!newName.trim()) return;
-    const { error } = await supabase.from('brokers').insert({ operational_name: newName.trim(), agency: newAgency, presence_status: 'ausente', attendance_status: 'livre', is_external_partner: false });
+    if (!newName.trim() || !newEquipe) return;
+    const { error } = await supabase.from('brokers').insert({ operational_name: newName.trim(), agency: newAgency, equipe: newEquipe, presence_status: 'ausente', attendance_status: 'livre', is_external_partner: false });
     if (error) { setError('Erro ao adicionar corretor.'); }
-    else { setNewName(''); setShowAdd(false); setError(null); }
+    else { setNewName(''); setNewEquipe(''); setShowAdd(false); setError(null); }
   }
 
   async function addPartnerBroker(e: React.FormEvent) {
@@ -94,6 +96,7 @@ export default function CorretorPanel({ brokers }: Props) {
           <strong className="text-white">Turno {currentShift === 'manha' ? 'Manhã' : 'Tarde'}:</strong> Check-in válido de {checkinLabel}. Sorteio automático às <strong className="text-amber-400">{sorteioTime}</strong>.
           {isPreSorteio && <span className="block mt-1 text-sky-400">Período Pré-Sorteio ativo — atendimento por ordem de chegada.</span>}
           {!isCheckinOpen && !isPreSorteio && <span className="block mt-1 text-slate-500">Check-in fechado neste horário.</span>}
+          {isBarrierActive && <span className="block mt-1 text-purple-400">Barreira ativa desde {barrierTime} — novos check-ins ficam “Apenas Indicação” (não entram nas filas dinâmicas).</span>}
           <span className="block mt-1 text-amber-400">Relógio do plantão: {clockDisplay}</span>
         </p>
       </div>
@@ -107,11 +110,18 @@ export default function CorretorPanel({ brokers }: Props) {
             </div>
             <div>
               <label className="block text-sm text-slate-400 mb-1">Imobiliária</label>
-              <select value={newAgency} onChange={(e) => setNewAgency(e.target.value as Agency)} className="bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-amber-500">
+              <select value={newAgency} onChange={(e) => { setNewAgency(e.target.value as Agency); setNewEquipe(''); }} className="bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-amber-500">
                 {AGENCIES.map((a) => <option key={a} value={a}>{a}</option>)}
               </select>
             </div>
-            <button type="submit" className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold px-5 py-2.5 rounded-xl transition">Adicionar</button>
+            <div>
+              <label className="block text-sm text-slate-400 mb-1">Equipe (Gerente) <span className="text-amber-400">*</span></label>
+              <select value={newEquipe} onChange={(e) => setNewEquipe(e.target.value)} required className="bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-amber-500">
+                <option value="">Selecione…</option>
+                {equipesForAgency(newAgency).map((eq) => <option key={eq} value={eq}>{eq}</option>)}
+              </select>
+            </div>
+            <button type="submit" disabled={!newName.trim() || !newEquipe} className="bg-amber-500 hover:bg-amber-400 disabled:bg-slate-700 disabled:text-slate-500 text-slate-950 font-bold px-5 py-2.5 rounded-xl transition">Adicionar</button>
             <button type="button" onClick={() => setShowAdd(false)} className="text-slate-400 hover:text-white px-3 py-2.5">Cancelar</button>
             {error && <p className="w-full text-sm text-red-400">{error}</p>}
           </form>
@@ -154,6 +164,7 @@ export default function CorretorPanel({ brokers }: Props) {
                     <div className="flex items-center gap-2 mt-1 flex-wrap">
                       <span className={`text-xs px-2 py-0.5 rounded-full ${broker.agency === 'Viva Imóveis' ? 'bg-amber-500/15 text-amber-400' : 'bg-sky-500/15 text-sky-400'}`}>{broker.agency}</span>
                       {late && <span className="text-xs px-2 py-0.5 rounded-full bg-red-500/15 text-red-400">Atrasado</span>}
+                      {broker.equipe && <span className="text-xs px-2 py-0.5 rounded-full bg-slate-600/30 text-slate-300">{broker.equipe}</span>}
                       {broker.attendance_status === 'apenas_indicacao' && <span className="text-xs px-2 py-0.5 rounded-full bg-purple-500/15 text-purple-400">Apenas Indicação</span>}
                       {broker.afternoon_reserved && <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-400">Vaga reservada tarde</span>}
                       {broker.shift && <span className={`text-xs px-2 py-0.5 rounded-full ${broker.shift === 'manha' ? 'bg-amber-500/15 text-amber-400' : 'bg-indigo-500/15 text-indigo-400'}`}>{broker.shift === 'manha' ? 'Manhã' : 'Tarde'}</span>}

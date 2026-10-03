@@ -49,6 +49,16 @@ export function sanitizePhone(input: string): string {
 export const AGENCIES: Agency[] = ['Viva Imóveis', 'Casa Nobre'];
 export const REASONS: VisitReason[] = ['Primeira visita', 'Retorno', 'Indicação', 'Parceria', 'Visita ao Decorado'];
 
+export const EQUIPES_BY_AGENCY: Record<Exclude<Agency, 'Externo'>, string[]> = {
+  'Viva Imóveis': ['Equipe Carlos', 'Equipe Rodrigo', 'Equipe Externa A'],
+  'Casa Nobre': ['Equipe Marcos', 'Equipe Tatiana', 'Equipe Externa B'],
+};
+
+export function equipesForAgency(agency: Agency): string[] {
+  if (agency === 'Externo') return [];
+  return EQUIPES_BY_AGENCY[agency] ?? [];
+}
+
 const ROTATION_KEY = 'plantao_company_rotation_index';
 const DRAW_ORDER_KEY = 'plantao_company_draw_order';
 
