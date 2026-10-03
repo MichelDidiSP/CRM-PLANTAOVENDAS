@@ -62,6 +62,52 @@ export function equipesForAgency(agency: Agency): string[] {
 const ROTATION_KEY = 'plantao_company_rotation_index';
 const DRAW_ORDER_KEY = 'plantao_company_draw_order';
 
+// --- Afternoon queue arrays (localStorage-backed, fully isolated from morning) ---
+const AFTERNOON_Q_A_KEY = 'plantao_queue_company_A_afternoon';
+const AFTERNOON_Q_B_KEY = 'plantao_queue_company_B_afternoon';
+const AFTERNOON_INVERSE_KEY = 'plantao_inverse_queue_general_afternoon';
+
+export function getAfternoonQueueA(): string[] {
+  try { const v = localStorage.getItem(AFTERNOON_Q_A_KEY); return v ? JSON.parse(v) : []; } catch { return []; }
+}
+export function setAfternoonQueueA(ids: string[]): void {
+  try { localStorage.setItem(AFTERNOON_Q_A_KEY, JSON.stringify(ids)); } catch { /* ignore */ }
+}
+export function getAfternoonQueueB(): string[] {
+  try { const v = localStorage.getItem(AFTERNOON_Q_B_KEY); return v ? JSON.parse(v) : []; } catch { return []; }
+}
+export function setAfternoonQueueB(ids: string[]): void {
+  try { localStorage.setItem(AFTERNOON_Q_B_KEY, JSON.stringify(ids)); } catch { /* ignore */ }
+}
+export function getAfternoonInverseQueue(): string[] {
+  try { const v = localStorage.getItem(AFTERNOON_INVERSE_KEY); return v ? JSON.parse(v) : []; } catch { return []; }
+}
+export function setAfternoonInverseQueue(ids: string[]): void {
+  try { localStorage.setItem(AFTERNOON_INVERSE_KEY, JSON.stringify(ids)); } catch { /* ignore */ }
+}
+
+export function initAfternoonQueues(): void {
+  setAfternoonQueueA([]);
+  setAfternoonQueueB([]);
+  setAfternoonInverseQueue([]);
+}
+
+export function resetAfternoonQueues(): void {
+  try {
+    localStorage.removeItem(AFTERNOON_Q_A_KEY);
+    localStorage.removeItem(AFTERNOON_Q_B_KEY);
+    localStorage.removeItem(AFTERNOON_INVERSE_KEY);
+  } catch { /* ignore */ }
+}
+
+export function isAfternoonInscriptionWindow(simSeconds: number): boolean {
+  return simSeconds >= TARDE_CHECKIN_OPEN_SECONDS && simSeconds <= LATE_LIMIT_TARDE;
+}
+
+export function isAfternoonArrivalBlocked(simSeconds: number): boolean {
+  return isAfternoonInscriptionWindow(simSeconds);
+}
+
 export function getCompanyRotationIndex(): number {
   try {
     const stored = localStorage.getItem(ROTATION_KEY);
@@ -112,6 +158,7 @@ export function getDispatchMode(simSeconds: number): DispatchMode {
 
 const TARDE_CHECKIN_OPEN_SECONDS = 13 * 3600;       // 13:00:00
 const TARDE_ATEND_START_SECONDS = 14 * 3600;          // 14:00:00
+// LATE_LIMIT_TARDE is already defined at the top of the file (13:45:59)
 
 export function isArrivalOrderMode(simSeconds: number): boolean {
   return getDispatchMode(simSeconds) === 'arrival';
@@ -119,6 +166,9 @@ export function isArrivalOrderMode(simSeconds: number): boolean {
 
 export function isArrivalOrderDispatchActive(simSeconds: number): boolean {
   if (simSeconds < ATENDIMENTO_MANHA_START) return true;
+  // Block afternoon arrival-order dispatch during the inscription window (13:00–13:45:59).
+  // Morning queues continue operating normally — they are unaffected.
+  if (isAfternoonInscriptionWindow(simSeconds)) return false;
   if (simSeconds >= SORTEIO_TARDE && simSeconds < ATENDIMENTO_TARDE_START) return true;
   return false;
 }
@@ -288,6 +338,7 @@ export async function reiniciarPlantao(brokers: Broker[]): Promise<void> {
     .in('status', ['aguardando', 'aguardando_chamada', 'em_atendimento']);
 
   resetCompanyRotation();
+  resetAfternoonQueues();
 }
 
 export async function transitionToAfternoon(brokers: Broker[]): Promise<void> {
@@ -329,6 +380,7 @@ export async function transitionToAfternoon(brokers: Broker[]): Promise<void> {
   }
 
   resetCompanyRotation();
+  initAfternoonQueues();
 }
 
 const PRIORITY_REASONS: VisitReason[] = ['Retorno', 'Indicação'];
@@ -779,6 +831,10 @@ export function prepareAfternoonArrays(brokers: Broker[]): {
   const viva = afternoonBrokers.filter((b) => b.agency === 'Viva Imóveis').sort((a, b) => (a.sorteio_order ?? 999) - (b.sorteio_order ?? 999));
   const nobre = afternoonBrokers.filter((b) => b.agency === 'Casa Nobre').sort((a, b) => (a.sorteio_order ?? 999) - (b.sorteio_order ?? 999));
   const inverse = afternoonBrokers.sort((a, b) => (a.inverse_order ?? 999_999) - (b.inverse_order ?? 999_999));
+
+  setAfternoonQueueA(viva.map((b) => b.id));
+  setAfternoonQueueB(nobre.map((b) => b.id));
+  setAfternoonInverseQueue(inverse.map((b) => b.id));
 
   return {
     queue_company_A_afternoon: viva,
