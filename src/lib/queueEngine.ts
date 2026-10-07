@@ -108,6 +108,14 @@ export function isAfternoonArrivalBlocked(simSeconds: number): boolean {
   return isAfternoonInscriptionWindow(simSeconds);
 }
 
+export function isAfternoonActive(simSeconds: number): boolean {
+  return simSeconds >= ATENDIMENTO_TARDE_START;
+}
+
+export function isMorningQueueActive(simSeconds: number): boolean {
+  return simSeconds < ATENDIMENTO_TARDE_START;
+}
+
 export function getCompanyRotationIndex(): number {
   try {
     const stored = localStorage.getItem(ROTATION_KEY);
@@ -284,6 +292,13 @@ export async function executeSorteio(brokers: Broker[], simSeconds: number, shif
   const drawOrder: Agency[] = [desempateWinner, desempateWinner === 'Viva Imóveis' ? 'Casa Nobre' : 'Viva Imóveis'];
   setCompanyDrawOrder(drawOrder);
   setCompanyRotationIndex(0);
+
+  // Persist afternoon localStorage arrays when this is the afternoon draw
+  if (shift === 'tarde') {
+    setAfternoonQueueA(vivaDirect.map((b) => b.id));
+    setAfternoonQueueB(nobreDirect.map((b) => b.id));
+    setAfternoonInverseQueue(inverseOrder.map((b) => b.id));
+  }
 
   await supabase.from('plantao_sessions').insert({
     id: sessionId,
@@ -603,6 +618,21 @@ export async function pushLateBrokerToQueues(brokerId: string, brokers: Broker[]
       inverse_order: maxInverse + 1,
     })
     .eq('id', brokerId);
+
+  // Also append to the afternoon localStorage arrays if the broker is in the afternoon shift
+  if (broker.shift === 'tarde') {
+    const afternoonA = getAfternoonQueueA();
+    const afternoonB = getAfternoonQueueB();
+    const afternoonInverse = getAfternoonInverseQueue();
+    if (broker.agency === 'Viva Imóveis' && !afternoonA.includes(brokerId)) {
+      setAfternoonQueueA([...afternoonA, brokerId]);
+    } else if (broker.agency === 'Casa Nobre' && !afternoonB.includes(brokerId)) {
+      setAfternoonQueueB([...afternoonB, brokerId]);
+    }
+    if (!afternoonInverse.includes(brokerId)) {
+      setAfternoonInverseQueue([...afternoonInverse, brokerId]);
+    }
+  }
 }
 
 export function resolveIndicacaoBroker(

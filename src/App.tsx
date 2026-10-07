@@ -12,7 +12,7 @@ import FilaPanel from '@/components/FilaPanel';
 type View = 'recepcao' | 'chamadas' | 'corretor' | 'fila' | 'auditoria';
 
 function AppContent() {
-  const { clockDisplay, setStartTime, addMinute, jumpToAfternoon, testMode, setTestMode, sorteioTriggered, resetClock, simSeconds, currentShift, isWeekday, plantaoDate, setPlantaoDate, isPreSorteio, isCheckinOpen, isAtendimentoActive, isShiftTransition } = useSim();
+  const { clockDisplay, setStartTime, addMinute, jumpToAfternoon, testMode, setTestMode, sorteioTriggered, resetClock, simSeconds, currentShift, isWeekday, plantaoDate, setPlantaoDate, isPreSorteio, isCheckinOpen, isAtendimentoActive, isShiftTransition, isAfternoonActive, isMorningQueueActive } = useSim();
   const [view, setView] = useState<View>('recepcao');
   const [brokers, setBrokers] = useState<Broker[]>([]);
   const [visits, setVisits] = useState<Visit[]>([]);
@@ -293,7 +293,7 @@ function AppContent() {
         {view === 'chamadas' && <ChamadasPanel queue={queue} brokers={brokers} />}
         {view === 'corretor' && <CorretorPanel brokers={brokers} />}
         {view === 'fila' && <FilaPanel queue={sortedQueue} brokers={brokers} allQueue={queue} />}
-        {view === 'auditoria' && <AuditoriaPanel sorteioResult={sorteioResult} brokers={brokers} queue={queue} attendanceReport={attendanceReport} />}
+        {view === 'auditoria' && <AuditoriaPanel sorteioResult={sorteioResult} brokers={brokers} queue={queue} attendanceReport={attendanceReport} isAfternoonActive={isAfternoonActive} isMorningQueueActive={isMorningQueueActive} />}
       </main>
 
       <footer className="border-t border-slate-800 py-3 text-center text-xs text-slate-500">
@@ -362,11 +362,13 @@ function brokerStatusBadge(b: Broker): { label: string; color: string } {
   }
 }
 
-function AuditoriaPanel({ sorteioResult, brokers, queue, attendanceReport }: {
+function AuditoriaPanel({ sorteioResult, brokers, queue, attendanceReport, isAfternoonActive, isMorningQueueActive }: {
   sorteioResult: SorteioResult | null;
   brokers: Broker[];
   queue: QueueEntry[];
   attendanceReport: QueueEntry[] | null;
+  isAfternoonActive: boolean;
+  isMorningQueueActive: boolean;
 }) {
   return (
     <div className="space-y-6">
@@ -529,98 +531,98 @@ function AuditoriaPanel({ sorteioResult, brokers, queue, attendanceReport }: {
       {/* TRÊS FILAS ISOLADAS — Tempo Real */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Tabela 1: Fila Direta — Empresa A (Viva) */}
-        <div className="bg-slate-900 rounded-2xl border border-amber-500/20 p-6">
+        <div className={`bg-slate-900 rounded-2xl border p-6 ${isAfternoonActive ? 'border-indigo-500/20' : 'border-amber-500/20'}`}>
           <div className="flex items-center justify-between mb-5">
             <div className="flex items-center gap-3">
-              <div className="bg-amber-500/10 p-3 rounded-xl"><ListOrdered className="h-6 w-6 text-amber-400" /></div>
+              <div className={`p-3 rounded-xl ${isAfternoonActive ? 'bg-indigo-500/10' : 'bg-amber-500/10'}`}><ListOrdered className={`h-6 w-6 ${isAfternoonActive ? 'text-indigo-400' : 'text-amber-400'}`} /></div>
               <div>
-                <h2 className="text-xl font-bold text-amber-400">Fila Direta — Empresa A</h2>
+                <h2 className={`text-xl font-bold ${isAfternoonActive ? 'text-indigo-400' : 'text-amber-400'}`}>Fila Direta — Empresa A{isAfternoonActive ? ' · Tarde' : ''}</h2>
                 <p className="text-sm text-slate-400">Viva Imóveis · Vez Geral</p>
               </div>
             </div>
-            <span className="text-2xl font-bold text-amber-400 tabular-nums">
-              {brokers.filter((b) => !b.is_external_partner && b.agency === 'Viva Imóveis' && b.presence_status === 'presente').length}
+            <span className={`text-2xl font-bold tabular-nums ${isAfternoonActive ? 'text-indigo-400' : 'text-amber-400'}`}>
+              {brokers.filter((b) => !b.is_external_partner && b.agency === 'Viva Imóveis' && b.presence_status === 'presente' && (isAfternoonActive ? b.shift === 'tarde' : b.shift === 'manha')).length}
             </span>
           </div>
           <div className="space-y-2">
             {[...brokers]
-              .filter((b) => !b.is_external_partner && b.agency === 'Viva Imóveis' && b.presence_status === 'presente')
+              .filter((b) => !b.is_external_partner && b.agency === 'Viva Imóveis' && b.presence_status === 'presente' && (isAfternoonActive ? b.shift === 'tarde' : b.shift === 'manha'))
               .sort((a, b) => (a.sorteio_order ?? 999) - (b.sorteio_order ?? 999))
               .map((b, i) => {
                 const { label, color } = brokerStatusBadge(b);
                 return (
-                  <div key={b.id} className="flex items-center gap-3 bg-slate-800/50 rounded-lg p-3 border border-amber-500/10">
-                    <span className="font-mono text-sm text-amber-400/60 w-8 text-center font-bold">{i + 1}.</span>
+                  <div key={b.id} className={`flex items-center gap-3 bg-slate-800/50 rounded-lg p-3 border ${isAfternoonActive ? 'border-indigo-500/10' : 'border-amber-500/10'}`}>
+                    <span className={`font-mono text-sm w-8 text-center font-bold ${isAfternoonActive ? 'text-indigo-400/60' : 'text-amber-400/60'}`}>{i + 1}.</span>
                     <span className="text-white text-sm font-medium flex-1">{b.operational_name}</span>
                     <span className="text-xs text-slate-500 hidden sm:inline">{b.equipe}</span>
                     <span className={`text-xs px-2 py-0.5 rounded-full ${color}`}>{label}</span>
                   </div>
                 );
               })}
-            {brokers.filter((b) => !b.is_external_partner && b.agency === 'Viva Imóveis' && b.presence_status === 'presente').length === 0 && (
+            {brokers.filter((b) => !b.is_external_partner && b.agency === 'Viva Imóveis' && b.presence_status === 'presente' && (isAfternoonActive ? b.shift === 'tarde' : b.shift === 'manha')).length === 0 && (
               <p className="text-sm text-slate-500 text-center py-6">Nenhum corretor presente.</p>
             )}
           </div>
         </div>
 
         {/* Tabela 2: Fila Direta — Empresa B (Nobre) */}
-        <div className="bg-slate-900 rounded-2xl border border-sky-500/20 p-6">
+        <div className={`bg-slate-900 rounded-2xl border p-6 ${isAfternoonActive ? 'border-indigo-500/20' : 'border-sky-500/20'}`}>
           <div className="flex items-center justify-between mb-5">
             <div className="flex items-center gap-3">
-              <div className="bg-sky-500/10 p-3 rounded-xl"><ListOrdered className="h-6 w-6 text-sky-400" /></div>
+              <div className={`p-3 rounded-xl ${isAfternoonActive ? 'bg-indigo-500/10' : 'bg-sky-500/10'}`}><ListOrdered className={`h-6 w-6 ${isAfternoonActive ? 'text-indigo-400' : 'text-sky-400'}`} /></div>
               <div>
-                <h2 className="text-xl font-bold text-sky-400">Fila Direta — Empresa B</h2>
+                <h2 className={`text-xl font-bold ${isAfternoonActive ? 'text-indigo-400' : 'text-sky-400'}`}>Fila Direta — Empresa B{isAfternoonActive ? ' · Tarde' : ''}</h2>
                 <p className="text-sm text-slate-400">Casa Nobre · Vez Geral</p>
               </div>
             </div>
-            <span className="text-2xl font-bold text-sky-400 tabular-nums">
-              {brokers.filter((b) => !b.is_external_partner && b.agency === 'Casa Nobre' && b.presence_status === 'presente').length}
+            <span className={`text-2xl font-bold tabular-nums ${isAfternoonActive ? 'text-indigo-400' : 'text-sky-400'}`}>
+              {brokers.filter((b) => !b.is_external_partner && b.agency === 'Casa Nobre' && b.presence_status === 'presente' && (isAfternoonActive ? b.shift === 'tarde' : b.shift === 'manha')).length}
             </span>
           </div>
           <div className="space-y-2">
             {[...brokers]
-              .filter((b) => !b.is_external_partner && b.agency === 'Casa Nobre' && b.presence_status === 'presente')
+              .filter((b) => !b.is_external_partner && b.agency === 'Casa Nobre' && b.presence_status === 'presente' && (isAfternoonActive ? b.shift === 'tarde' : b.shift === 'manha'))
               .sort((a, b) => (a.sorteio_order ?? 999) - (b.sorteio_order ?? 999))
               .map((b, i) => {
                 const { label, color } = brokerStatusBadge(b);
                 return (
-                  <div key={b.id} className="flex items-center gap-3 bg-slate-800/50 rounded-lg p-3 border border-sky-500/10">
-                    <span className="font-mono text-sm text-sky-400/60 w-8 text-center font-bold">{i + 1}.</span>
+                  <div key={b.id} className={`flex items-center gap-3 bg-slate-800/50 rounded-lg p-3 border ${isAfternoonActive ? 'border-indigo-500/10' : 'border-sky-500/10'}`}>
+                    <span className={`font-mono text-sm w-8 text-center font-bold ${isAfternoonActive ? 'text-indigo-400/60' : 'text-sky-400/60'}`}>{i + 1}.</span>
                     <span className="text-white text-sm font-medium flex-1">{b.operational_name}</span>
                     <span className="text-xs text-slate-500 hidden sm:inline">{b.equipe}</span>
                     <span className={`text-xs px-2 py-0.5 rounded-full ${color}`}>{label}</span>
                   </div>
                 );
               })}
-            {brokers.filter((b) => !b.is_external_partner && b.agency === 'Casa Nobre' && b.presence_status === 'presente').length === 0 && (
+            {brokers.filter((b) => !b.is_external_partner && b.agency === 'Casa Nobre' && b.presence_status === 'presente' && (isAfternoonActive ? b.shift === 'tarde' : b.shift === 'manha')).length === 0 && (
               <p className="text-sm text-slate-500 text-center py-6">Nenhum corretor presente.</p>
             )}
           </div>
         </div>
 
         {/* Tabela 3: Fila Inversa Geral (Decorado) */}
-        <div className="bg-slate-900 rounded-2xl border border-orange-500/20 p-6">
+        <div className={`bg-slate-900 rounded-2xl border p-6 ${isAfternoonActive ? 'border-indigo-500/20' : 'border-orange-500/20'}`}>
           <div className="flex items-center justify-between mb-5">
             <div className="flex items-center gap-3">
-              <div className="bg-orange-500/10 p-3 rounded-xl"><Home className="h-6 w-6 text-orange-400" /></div>
+              <div className={`p-3 rounded-xl ${isAfternoonActive ? 'bg-indigo-500/10' : 'bg-orange-500/10'}`}><Home className={`h-6 w-6 ${isAfternoonActive ? 'text-indigo-400' : 'text-orange-400'}`} /></div>
               <div>
-                <h2 className="text-xl font-bold text-orange-400">Fila Inversa Geral</h2>
+                <h2 className={`text-xl font-bold ${isAfternoonActive ? 'text-indigo-400' : 'text-orange-400'}`}>Fila Inversa Geral{isAfternoonActive ? ' · Tarde' : ''}</h2>
                 <p className="text-sm text-slate-400">Decorado · Índice independente</p>
               </div>
             </div>
-            <span className="text-2xl font-bold text-orange-400 tabular-nums">
-              {brokers.filter((b) => !b.is_external_partner && b.presence_status === 'presente').length}
+            <span className={`text-2xl font-bold tabular-nums ${isAfternoonActive ? 'text-indigo-400' : 'text-orange-400'}`}>
+              {brokers.filter((b) => !b.is_external_partner && b.presence_status === 'presente' && (isAfternoonActive ? b.shift === 'tarde' : b.shift === 'manha')).length}
             </span>
           </div>
           <div className="space-y-2">
             {[...brokers]
-              .filter((b) => !b.is_external_partner && b.presence_status === 'presente')
+              .filter((b) => !b.is_external_partner && b.presence_status === 'presente' && (isAfternoonActive ? b.shift === 'tarde' : b.shift === 'manha'))
               .sort((a, b) => (a.inverse_order ?? 999_999) - (b.inverse_order ?? 999_999))
               .map((b, i) => {
                 const { label, color } = brokerStatusBadge(b);
                 return (
-                  <div key={b.id} className="flex items-center gap-3 bg-slate-800/50 rounded-lg p-3 border border-orange-500/10">
-                    <span className="font-mono text-sm text-orange-400/60 w-8 text-center font-bold">{i + 1}.</span>
+                  <div key={b.id} className={`flex items-center gap-3 bg-slate-800/50 rounded-lg p-3 border ${isAfternoonActive ? 'border-indigo-500/10' : 'border-orange-500/10'}`}>
+                    <span className={`font-mono text-sm w-8 text-center font-bold ${isAfternoonActive ? 'text-indigo-400/60' : 'text-orange-400/60'}`}>{i + 1}.</span>
                     <span className="text-white text-sm font-medium flex-1">{b.operational_name}</span>
                     <span className="text-xs text-slate-500 hidden lg:inline">{b.equipe}</span>
                     <span className={`text-xs px-2 py-0.5 rounded-full ${b.agency === 'Viva Imóveis' ? 'bg-amber-500/15 text-amber-400' : 'bg-sky-500/15 text-sky-400'}`}>{b.agency}</span>
@@ -628,7 +630,7 @@ function AuditoriaPanel({ sorteioResult, brokers, queue, attendanceReport }: {
                   </div>
                 );
               })}
-            {brokers.filter((b) => !b.is_external_partner && b.presence_status === 'presente').length === 0 && (
+            {brokers.filter((b) => !b.is_external_partner && b.presence_status === 'presente' && (isAfternoonActive ? b.shift === 'tarde' : b.shift === 'manha')).length === 0 && (
               <p className="text-sm text-slate-500 text-center py-6">Nenhum corretor presente.</p>
             )}
           </div>

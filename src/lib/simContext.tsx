@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, useRef, useCallback, type ReactNode } from 'react';
 import type { Shift } from './supabase';
-import { isManhaSorteioActive as checkManhaSorteio } from './queueEngine';
+import { isManhaSorteioActive as checkManhaSorteio, isAfternoonActive as checkAfternoonActive, isMorningQueueActive as checkMorningQueueActive } from './queueEngine';
 
 // Shift windows (seconds since midnight)
 const MANHA_START = 8 * 3600;          // 08:00:00 — check-in opens
@@ -43,6 +43,8 @@ type SimContextType = {
   isAtendimentoActive: boolean;
   isShiftTransition: boolean;
   isManhaSorteioActive: boolean;
+  isAfternoonActive: boolean;
+  isMorningQueueActive: boolean;
 };
 
 const SimContext = createContext<SimContextType | null>(null);
@@ -182,6 +184,8 @@ export function SimProvider({ children }: { children: ReactNode }) {
   const isAtendimentoActive = simSeconds >= boundaries.atendStart && simSeconds < boundaries.atendEnd;
   const isShiftTransition = simSeconds >= MANHA_ATEND_END && simSeconds < MANHA_ATEND_END + 60;
   const manhaSorteioActive = checkManhaSorteio(simSeconds);
+  const afternoonActive = checkAfternoonActive(simSeconds);
+  const morningQueueActive = checkMorningQueueActive(simSeconds);
 
   return (
     <SimContext.Provider
@@ -206,6 +210,8 @@ export function SimProvider({ children }: { children: ReactNode }) {
         isAtendimentoActive,
         isShiftTransition,
         isManhaSorteioActive: manhaSorteioActive,
+        isAfternoonActive: afternoonActive,
+        isMorningQueueActive: morningQueueActive,
       }}
     >
       {children}
