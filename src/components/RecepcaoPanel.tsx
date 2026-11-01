@@ -36,7 +36,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
   const [submitting, setSubmitting] = useState(false);
   const [searchPhone, setSearchPhone] = useState('');
   const [revealed, setRevealed] = useState(false);
-  const { currentShift, simSeconds, getCurrentTime } = useSim();
+  const { currentShift, simSeconds, getCurrentTime, isHoliday, setIsHoliday, isExtendedShift } = useSim();
 
   // Predictive search state
   const [brokerSearch, setBrokerSearch] = useState('');
@@ -286,7 +286,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
       const result = resolveApenasImobiliariaBroker(brokers, apenasImobiliariaAgency, busyIds);
       assignedBrokerId = result.broker?.id ?? null;
     } else if (isDecoradoQuick) {
-      if (isArrivalOrderDispatchActive(simSeconds)) {
+      if (isArrivalOrderDispatchActive(simSeconds, isExtendedShift)) {
         const broker = nextBrokerByArrivalInverse(brokers, busyIds);
         assignedBrokerId = broker?.id ?? null;
       } else {
@@ -294,7 +294,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
         assignedBrokerId = broker?.id ?? null;
       }
     } else if (!isParceriaQuick) {
-      if (isArrivalOrderDispatchActive(simSeconds)) {
+      if (isArrivalOrderDispatchActive(simSeconds, isExtendedShift)) {
         const broker = nextBrokerByArrivalAnyAgency(brokers, busyIds);
         assignedBrokerId = broker?.id ?? null;
       } else {
@@ -347,6 +347,21 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
       <div className="lg:col-span-3">
+        <div className="flex items-center justify-between gap-3 bg-slate-900 rounded-2xl border border-slate-800 px-5 py-3 mb-4">
+          <div>
+            <p className="text-sm font-medium text-slate-200">Marcar Feriado</p>
+            <p className="text-xs text-slate-500">Feriado ou fim de semana operam em turno único estendido, sem sorteio da tarde.</p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={isHoliday}
+            onClick={() => setIsHoliday(!isHoliday)}
+            className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition ${isHoliday ? 'bg-amber-500' : 'bg-slate-700'}`}
+          >
+            <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition ${isHoliday ? 'translate-x-5' : 'translate-x-0.5'}`} />
+          </button>
+        </div>
         {/* Simular Entrada Rápida */}
         <div className="bg-gradient-to-r from-amber-500/10 to-orange-500/10 rounded-2xl border border-amber-500/30 p-5 mb-4">
           <div className="flex items-center gap-3 mb-4">

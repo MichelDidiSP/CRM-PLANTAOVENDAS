@@ -45,6 +45,9 @@ type SimContextType = {
   isManhaSorteioActive: boolean;
   isAfternoonActive: boolean;
   isMorningQueueActive: boolean;
+  isHoliday: boolean;
+  setIsHoliday: (on: boolean) => void;
+  isExtendedShift: boolean;
 };
 
 const SimContext = createContext<SimContextType | null>(null);
@@ -75,6 +78,7 @@ function determineShift(seconds: number): Shift {
 
 const STORAGE_KEY = 'plantao_sim_seconds';
 const TESTMODE_KEY = 'plantao_test_mode';
+const HOLIDAY_KEY = 'crm_is_holiday';
 
 export function SimProvider({ children }: { children: ReactNode }) {
   const [simSeconds, setSimSeconds] = useState(() => {
@@ -89,6 +93,9 @@ export function SimProvider({ children }: { children: ReactNode }) {
   });
   const [testMode, setTestMode] = useState(() => {
     try { return localStorage.getItem(TESTMODE_KEY) === 'true'; } catch { return false; }
+  });
+  const [isHoliday, setIsHoliday] = useState(() => {
+    try { return localStorage.getItem(HOLIDAY_KEY) === 'true'; } catch { return false; }
   });
   const [sorteioTriggered, setSorteioTriggered] = useState(false);
   const [plantaoDate, setPlantaoDate] = useState(() => new Date().toISOString().slice(0, 10));
@@ -105,7 +112,8 @@ export function SimProvider({ children }: { children: ReactNode }) {
     return () => window.clearInterval(interval);
   }, []);
 
-  const currentShift = determineShift(simSeconds);
+  const isExtendedShift = isWeekendDate(plantaoDate) || isHoliday;
+  const currentShift: Shift = isExtendedShift ? 'manha' : determineShift(simSeconds);
   const boundaries = SHIFT_BOUNDARIES[currentShift];
   const sorteioThreshold = boundaries.sorteio;
 
@@ -164,6 +172,10 @@ export function SimProvider({ children }: { children: ReactNode }) {
     try { localStorage.setItem(TESTMODE_KEY, String(testMode)); } catch { /* ignore */ }
   }, [testMode]);
 
+  useEffect(() => {
+    try { localStorage.setItem(HOLIDAY_KEY, String(isHoliday)); } catch { /* ignore */ }
+  }, [isHoliday]);
+
   // Restore sorteioTriggered state on mount based on persisted time
   useEffect(() => {
     const shift = determineShift(simSeconds);
@@ -181,11 +193,12 @@ export function SimProvider({ children }: { children: ReactNode }) {
 
   const isPreSorteio = simSeconds < boundaries.sorteio && simSeconds >= boundaries.checkinOpen;
   const isCheckinOpen = simSeconds >= boundaries.checkinOpen && simSeconds <= boundaries.checkinLimit;
-  const isAtendimentoActive = simSeconds >= boundaries.atendStart && simSeconds < boundaries.atendEnd;
-  const isShiftTransition = simSeconds >= MANHA_ATEND_END && simSeconds < MANHA_ATEND_END + 60;
+  const atendEnd = isExtendedShift ? TARDE_ATEND_END : boundaries.atendEnd;
+  const isAtendimentoActive = simSeconds >= boundaries.atendStart && simSeconds < atendEnd;
+  const isShiftTransition = !isExtendedShift && simSeconds >= MANHA_ATEND_END && simSeconds < MANHA_ATEND_END + 60;
   const manhaSorteioActive = checkManhaSorteio(simSeconds);
-  const afternoonActive = checkAfternoonActive(simSeconds);
-  const morningQueueActive = checkMorningQueueActive(simSeconds);
+  const afternoonActive = !isExtendedShift && checkAfternoonActive(simSeconds);
+  const morningQueueActive = isExtendedShift || checkMorningQueueActive(simSeconds);
 
   return (
     <SimContext.Provider
@@ -212,6 +225,9 @@ export function SimProvider({ children }: { children: ReactNode }) {
         isManhaSorteioActive: manhaSorteioActive,
         isAfternoonActive: afternoonActive,
         isMorningQueueActive: morningQueueActive,
+        isHoliday,
+        setIsHoliday,
+        isExtendedShift,
       }}
     >
       {children}

@@ -172,8 +172,9 @@ export function isArrivalOrderMode(simSeconds: number): boolean {
   return getDispatchMode(simSeconds) === 'arrival';
 }
 
-export function isArrivalOrderDispatchActive(simSeconds: number): boolean {
+export function isArrivalOrderDispatchActive(simSeconds: number, isExtendedShift = false): boolean {
   if (simSeconds < ATENDIMENTO_MANHA_START) return true;
+  if (isExtendedShift) return false;
   // Block afternoon arrival-order dispatch during the inscription window (13:00–13:45:59).
   // Morning queues continue operating normally — they are unaffected.
   if (isAfternoonInscriptionWindow(simSeconds)) return false;
