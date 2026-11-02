@@ -440,16 +440,16 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
                   className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
                 >
                   <option value="">Selecione um corretor…</option>
-                  {(isIndicacaoPresente ? presentBrokers : allInternalBrokers.filter((b) => b.presence_status === 'ausente')).map((b) => (
+                  {(isIndicacaoPresente ? presentBrokers : allInternalBrokers.filter((b) => b.presence_status !== 'presente')).map((b) => (
                     <option key={b.id} value={b.id}>
-                      {b.operational_name} ({b.agency}) · {b.equipe} {b.presence_status === 'presente' ? '· Presente' : '· Ausente'}{b.attendance_status === 'apenas_indicacao' ? ' · Apenas Indicação' : ''}
+                      {b.operational_name} ({b.agency}) · {b.equipe} {b.presence_status === 'presente' ? '· Presente' : b.presence_status === 'pausa' ? '· Pausa' : '· Ausente'}{b.attendance_status === 'apenas_indicacao' ? ' · Apenas Indicação' : ''}
                     </option>
                   ))}
                 </select>
                 {isIndicacaoPresente && presentBrokers.length === 0 && (
                   <p className="text-xs text-slate-500 mt-1">Nenhum corretor marcou presença ainda.</p>
                 )}
-                {isIndicacaoAusente && allInternalBrokers.filter((b) => b.presence_status === 'ausente').length === 0 && (
+                {isIndicacaoAusente && allInternalBrokers.filter((b) => b.presence_status !== 'presente').length === 0 && (
                   <p className="text-xs text-slate-500 mt-1">Nenhum corretor ausente para indicar.</p>
                 )}
               </div>
@@ -680,7 +680,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
                             <div className="flex items-center gap-2">
                               <span className="text-white text-sm font-medium truncate">{b.operational_name}</span>
                               <span className={`text-xs px-1.5 py-0.5 rounded-full shrink-0 ${b.presence_status === 'presente' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-red-500/15 text-red-400'}`}>
-                                {b.presence_status === 'presente' ? 'Presente' : 'Ausente'}
+                                {b.presence_status === 'presente' ? 'Presente' : b.presence_status === 'pausa' ? 'Pausa' : 'Ausente'}
                               </span>
                             </div>
                             <div className="flex items-center gap-2 mt-0.5 text-xs text-slate-400">
@@ -780,7 +780,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
                         </>
                       ) : (
                         <>
-                          <span className="px-2 py-0.5 rounded-full bg-red-500/15 text-red-400">Ausente</span>
+                          <span className="px-2 py-0.5 rounded-full bg-red-500/15 text-red-400">{selectedBroker.presence_status === 'pausa' ? 'Pausa' : 'Ausente'}</span>
                           <span className="text-slate-400">
                             Transbordo: Mesma Equipe ({selectedBroker.equipe}) → Mesma Empresa ({selectedBroker.agency})
                           </span>
