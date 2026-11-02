@@ -17,6 +17,8 @@ import {
   resolveApenasImobiliariaBroker,
   dispatchBroker,
   isArrivalOrderDispatchActive,
+  isAfternoonInscriptionWindow,
+  isLateCheckIn,
 } from '@/lib/queueEngine';
 import { useSim } from '@/lib/simContext';
 
@@ -77,6 +79,9 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
   );
   const allInternalBrokers = brokers.filter(
     (b) => !b.is_external_partner,
+  );
+  const afternoonCheckedIn = brokers.filter(
+    (b) => !b.is_external_partner && b.agency !== 'Externo' && b.presence_status === 'presente' && b.shift === 'tarde',
   );
 
   // Predictive search results — scans ALL internal brokers (present + absent + external team)
@@ -362,6 +367,37 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
             <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition ${isHoliday ? 'translate-x-5' : 'translate-x-0.5'}`} />
           </button>
         </div>
+        {currentShift === 'tarde' && !isExtendedShift && (
+          <div className="bg-slate-900 rounded-2xl border border-indigo-500/30 p-5 mb-4">
+            <div className="flex items-center justify-between gap-3 mb-3">
+              <div>
+                <h2 className="text-lg font-bold text-indigo-300">Inscrição do Turno da Tarde</h2>
+                <p className="text-sm text-slate-400">
+                  {isAfternoonInscriptionWindow(simSeconds) ? 'Inscrições abertas até 13:45:59' : 'Inscrições encerradas — sorteio às 13:46h'}
+                </p>
+              </div>
+              <span className="text-2xl font-bold tabular-nums text-indigo-300">{afternoonCheckedIn.length}</span>
+            </div>
+            {afternoonCheckedIn.length === 0 ? (
+              <p className="text-sm text-amber-400 bg-amber-500/10 rounded-lg p-3">
+                Nenhum corretor fez check-in para a tarde. O sorteio fica suspenso até haver corretores presentes.
+              </p>
+            ) : (
+              <ul className="space-y-2 max-h-[200px] overflow-y-auto">
+                {afternoonCheckedIn.map((b) => (
+                  <li key={b.id} className="flex items-center justify-between text-sm bg-slate-800/60 rounded-lg px-3 py-2">
+                    <span className="text-white">{b.operational_name}</span>
+                    <span className="flex items-center gap-2 text-xs text-slate-400">
+                      {b.arrived_at && new Date(b.arrived_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                      {isLateCheckIn(b) && <span className="px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-400">Atrasado</span>}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
         {/* Simular Entrada Rápida */}
         <div className="bg-gradient-to-r from-amber-500/10 to-orange-500/10 rounded-2xl border border-amber-500/30 p-5 mb-4">
           <div className="flex items-center gap-3 mb-4">

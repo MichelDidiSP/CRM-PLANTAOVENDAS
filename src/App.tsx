@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { Building2, DoorOpen, Tv, Users, ListOrdered, Zap, Clock, Plus, Shuffle, ClipboardList, RefreshCw, FileText, X, Trophy, Calendar, Sun, Moon, ArrowRight, Home, Database } from 'lucide-react';
+import { Building2, DoorOpen, Tv, Users, ListOrdered, Zap, Clock, Plus, Shuffle, ClipboardList, RefreshCw, FileText, X, Trophy, Calendar, Sun, Moon, ArrowRight, Home, Database, TriangleAlert as AlertTriangle } from 'lucide-react';
 import { supabase, dbReady, type Broker, type QueueEntry, type Visit, type PlantaoSession } from '@/lib/supabase';
-import { fetchAll, interleaveQueue, executeSorteio, reiniciarPlantao, transitionToAfternoon, exportRelatorioFechamento, isLateForSort, type SorteioResult } from '@/lib/queueEngine';
+import { fetchAll, interleaveQueue, executeSorteio, reiniciarPlantao, transitionToAfternoon, exportRelatorioFechamento, isLateForSort, hasAfternoonCheckIn, ATENDIMENTO_TARDE_START, type SorteioResult } from '@/lib/queueEngine';
 import { SimProvider, useSim } from '@/lib/simContext';
 
 import RecepcaoPanel from '@/components/RecepcaoPanel';
@@ -69,7 +69,7 @@ function AppContent() {
 
   // Sorteio automático
   useEffect(() => {
-    if (sorteioTriggered && !sorteioExecutedRef.current && brokers.length > 0) {
+    if (sorteioTriggered && !sorteioExecutedRef.current && brokers.length > 0 && (currentShift === 'manha' || hasAfternoonCheckIn(brokers))) {
       sorteioExecutedRef.current = true;
       executeSorteio(brokers, simSeconds, currentShift).then((result) => {
         if (result) {
@@ -255,6 +255,13 @@ function AppContent() {
             <div className="flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-4 py-2 mb-2 text-sm text-emerald-400">
               <Shuffle className="h-4 w-4 shrink-0" />
               <span><strong className="text-emerald-300">Sorteio executado — Turno {sorteioResult.shift === 'manha' ? 'Manhã' : 'Tarde'}</strong> — {sorteioResult.vivaBrokers.length} corretores Viva + {sorteioResult.nobreBrokers.length} Casa Nobre intercalados. <strong className="text-amber-300">Desempate: {sorteioResult.desempateWinner} ganhou a preferência</strong>. {sorteioResult.lateBrokers.length} atrasado(s) no fim.</span>
+            </div>
+          )}
+
+          {sorteioTriggered && currentShift === 'tarde' && !hasAfternoonCheckIn(brokers) && simSeconds < ATENDIMENTO_TARDE_START && (
+            <div className="flex items-center gap-2 bg-amber-500/10 border border-amber-500/30 rounded-lg px-4 py-2 mb-2 text-sm text-amber-400">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              <span><strong className="text-amber-300">Sorteio da tarde suspenso</strong> — nenhum corretor fez check-in para o turno da tarde. O sorteio será executado assim que houver corretores presentes.</span>
             </div>
           )}
 

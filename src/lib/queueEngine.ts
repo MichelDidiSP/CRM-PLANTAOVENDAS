@@ -29,6 +29,14 @@ export function isApenasIndicacao(broker: Broker): boolean {
   return broker.attendance_status === 'apenas_indicacao';
 }
 
+export function isLateCheckIn(broker: Broker): boolean {
+  return broker.arrived_at != null && isLateForSort(broker.arrived_at, broker.shift ?? 'manha');
+}
+
+export function hasAfternoonCheckIn(brokers: Broker[]): boolean {
+  return brokers.some((b) => !b.is_external_partner && b.agency !== 'Externo' && b.presence_status === 'presente' && b.shift === 'tarde');
+}
+
 export function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60).toString().padStart(2, '0');
   const s = Math.floor(seconds % 60).toString().padStart(2, '0');
@@ -569,7 +577,10 @@ export function lastBrokerFromAgency(brokers: Broker[], agency: Agency, excludeI
     .filter((b) => !b.is_external_partner && b.agency === agency && b.presence_status === 'presente' && b.attendance_status === 'livre' && !isApenasIndicacao(b) && !excludeIds.has(b.id))
     .sort((a, b) => (b.sorteio_order ?? 0) - (a.sorteio_order ?? 0));
 
-  return agencyBrokers[0];
+  const onTime = agencyBrokers.filter((b) => !isLateCheckIn(b));
+  if (onTime.length > 0) return onTime[0];
+  const checkedIn = brokers.filter((b) => !b.is_external_partner && b.agency === agency && b.presence_status === 'presente');
+  return checkedIn.length === 1 ? agencyBrokers[0] : undefined;
 }
 
 /**
@@ -581,7 +592,7 @@ export function lastBrokerFromTeam(brokers: Broker[], equipe: string, excludeIds
     .filter((b) => !b.is_external_partner && b.equipe === equipe && b.presence_status === 'presente' && b.attendance_status === 'livre' && !isApenasIndicacao(b) && !excludeIds.has(b.id))
     .sort((a, b) => (b.sorteio_order ?? 0) - (a.sorteio_order ?? 0));
 
-  return teamBrokers[0];
+  return teamBrokers.find((b) => !isLateCheckIn(b));
 }
 
 /**
