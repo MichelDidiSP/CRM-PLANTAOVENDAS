@@ -647,6 +647,32 @@ export async function pushLateBrokerToQueues(brokerId: string, brokers: Broker[]
   }
 }
 
+/**
+ * Re-entry from Pausa to Presente in the company's direct queue.
+ * - Turn already passed, or returning exactly at the next turn: placed immediately after the broker being served.
+ * - Returning earlier: keeps the original position.
+ */
+export async function reenterDirectQueueFromPausa(brokerId: string, brokers: Broker[]): Promise<void> {
+  const broker = brokers.find((b) => b.id === brokerId);
+  if (!broker || broker.is_external_partner || broker.sorteio_order == null) return;
+
+  const served = brokers.find(
+    (b) => !b.is_external_partner && b.agency === broker.agency && b.id !== brokerId && b.sorteio_order != null && (b.attendance_status === 'em_mesa' || b.attendance_status === 'em_atendimento'),
+  );
+  if (!served || served.sorteio_order == null) return;
+
+  const newOrder = served.sorteio_order + 1;
+  if (broker.sorteio_order >= newOrder) return;
+
+  const shifted = brokers.filter(
+    (b) => !b.is_external_partner && b.agency === broker.agency && b.id !== brokerId && b.sorteio_order != null && b.sorteio_order >= newOrder,
+  );
+  for (const b of shifted) {
+    await supabase.from('brokers').update({ sorteio_order: (b.sorteio_order ?? 0) + 1 }).eq('id', b.id);
+  }
+  await supabase.from('brokers').update({ sorteio_order: newOrder }).eq('id', brokerId);
+}
+
 export function resolveIndicacaoBroker(
   brokers: Broker[],
   referredBrokerId: string | null,
