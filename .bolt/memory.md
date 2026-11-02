@@ -15,39 +15,42 @@
 
 ## Visual design & UX direction
 
-- Reception view should surface the afternoon registration panel from 13:00 on weekdays, rather than hiding it until a broker checks in.
-- The panel lists afternoon-shift brokers and visibly distinguishes late arrivals.
+- Reception view surfaces the afternoon registration panel from 13:00 on weekdays and visibly distinguishes late arrivals.
 - Client-creation views separate brokers into:
   - “Presente”: only brokers whose active status is exactly `presente`.
   - “Ausente”: brokers with `ausente` or `pausa`.
-- When shown in the unavailable list, paused brokers should retain a visible “Pausa” label rather than being mislabeled as absent.
-- The 13:46 draw needs a visible warning/alert when no afternoon brokers are registered; keep registration controls accessible instead of allowing an empty draw.
+- Paused brokers retain a visible “Pausa” label rather than being mislabeled as absent.
+- The 13:46 draw shows a clear warning or blocked state when no afternoon brokers are registered, while keeping registration controls accessible.
+- Preserve responsive reception usability and clear feedback around check-in eligibility, referral routing, return-from-absence behavior, and own-referral-only restrictions.
 - Prefer existing project components, Tailwind styling, React hooks, and Lucide icons; avoid introducing UI dependencies.
-- Preserve responsive reception usability and clear status feedback around check-in eligibility and referral routing.
+- A broker-card badge for the own-referrals-only state has not yet been added.
 
 ## Decisions, constraints & rationale
 
-- Active broker status values include `presente`, `ausente`, and `pausa`.
-- Present-list filtering is strict: only `presente` qualifies. Do not use a broad “not absent” check.
-- Paused brokers are treated as unavailable for standard client assignment, matching absent-broker restrictions.
-- Routing helpers currently require `presente`, which excludes paused brokers from normal round-robin clients and referral transfers. Preserve this invariant in future routing changes.
-- A paused broker may not receive standard round-robin or transferred referrals unless a separately documented business rule explicitly changes unavailable-status behavior.
-- Late status is represented by the existing `isLateForSort` behavior for check-ins after the afternoon draw; referral-transfer helpers must honor it.
-- Referral fallback cascades backward through the same team/company queue, but skips late brokers from receiving transferred referrals.
-- A late broker may still receive their own explicit/direct referrals, a client when their normal direct-queue turn arrives, and a transferred referral when they are the sole checked-in broker for that company.
-- The late-broker exclusion applies until the original queue completes one full rotation; whether this is explicitly tracked remains unresolved.
-- Afternoon registration is explicitly opened at 13:00 on weekdays.
-- The 13:46 afternoon draw must be blocked or warned when zero afternoon brokers are checked in; it should not execute against an empty list.
-- Current implementation reportedly builds successfully after the broker status visibility update.
-- Existing engine tests previously showed 4 failures out of 37; they were not conclusively compared with a pre-change baseline. Shared team-name fixtures and shared test state were suspected contributors.
+- Active broker statuses are `presente`, `ausente`, and `pausa`.
+- Present-list filtering is strict: only `presente` qualifies. Paused brokers remain unavailable for standard assignment.
+- Routing helpers require `presente`; paused and absent brokers are excluded from round-robin, normal transfers, and company/team referral chains.
+- Brokers entering `pausa` or `ausente` receive a departure timestamp. Manual status changes and automatic pause writers use the simulated/application clock consistently.
+- Returning from either `pausa` or `ausente` applies the same re-entry logic:
+  - If the original turn is due or already passed, the broker loses immediate top priority and is placed immediately after the currently served broker (`current_turn + 1`).
+  - If returning before their turn and before the same-company broker ahead of them is served, they retain their original queue position.
+- Absence penalty is strict: duration must exceed 120 minutes; exactly 120 minutes does not trigger it.
+- After the penalty, the broker permanently receives an own-referrals-only flag for that shift (implemented as a broker field), loses direct and reverse queue positions, and is excluded from round-robin and all company/team transfer chains.
+- Own-referrals-only brokers may receive only their own direct personal referrals.
+- Penalty enforcement runs on application clock ticks, including when the broker does not return. Departure timestamp is cleared on return; the penalty flag resets at restart and afternoon transition.
+- Existing late-broker rules remain: late brokers are excluded from transferred referrals until the applicable queue rotation condition, with documented exceptions for direct referrals, normal direct turns, and sole checked-in-company cases.
+- Afternoon registration opens at 13:00 on weekdays; the 13:46 draw must not execute against an empty broker list.
+- Database schema now includes departure-time and per-shift own-referrals-only fields for brokers. The migration is idempotent and requires no new policies or grants.
+- Build passes and nine new focused tests pass. Four older engine tests remain failing and were not conclusively established as regressions.
 
 ## Open questions & assumptions
 
-- Verify whether every reception/simulation client-creation view uses the strict `presente` filter and groups both `ausente` and `pausa` in the unavailable list.
-- Confirm whether paused brokers should count toward any check-in-panel “present” totals. The current count reportedly uses “not absent,” so it may include paused brokers even though they are unavailable for dispatch.
-- Verify the exact “one full rotation” state transition for late-broker referral eligibility.
-- Confirm whether “after the 13:46 afternoon draw” means strictly `> 13:46` or includes arrivals exactly at 13:46.
-- Confirm timezone and clock-source behavior for weekday/13:00/13:46 checks, especially around seconds and test environments.
-- Determine whether the empty-draw warning should be a persistent reception banner, modal/alert, toast, or disabled draw action.
-- Add or update focused tests for paused/absent filtering, paused exclusion from round-robin and referral transfers, late-broker fallback rules, direct referral eligibility, normal-turn eligibility, 13:00 panel visibility, weekday/weekend boundaries, and empty 13:46 draw prevention.
-- Inspect the four existing failing tests before relying on the current suite as a regression signal.
+- Verify every reception/simulation client-creation view uses strict `presente` filtering and groups both `ausente` and `pausa` as unavailable.
+- Confirm whether management-screen “Presente” totals should exclude paused brokers; that screen currently still counts `pausa` as present.
+- Confirm the exact implementation and test coverage for preserving an early returnee’s original position relative to the same-company broker ahead.
+- Verify the “current turn + 1” insertion behavior when the active turn is at a queue boundary or when no broker is currently being served.
+- Confirm whether “permanent for that shift” should survive browser reloads but reset only at restart/afternoon transition, matching the current implementation.
+- Determine the desired UI treatment for own-referrals-only brokers, including badge, explanatory text, and disabled transfer actions.
+- Confirm timezone and clock-source behavior around weekday, 13:00, 13:46, and the strict 120-minute boundary.
+- Inspect and resolve the four pre-existing engine test failures before treating the full suite as a regression signal.
+- Continue focused coverage for paused/absent filtering, re-entry positioning, exact and over-120-minute penalties, own-referral routing, late-broker fallback, draw prevention, and shift resets.

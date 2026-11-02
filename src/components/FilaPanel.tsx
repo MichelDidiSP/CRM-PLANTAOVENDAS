@@ -10,7 +10,7 @@ type Props = {
 };
 
 export default function FilaPanel({ queue, brokers, allQueue }: Props) {
-  const { isPreSorteio, currentShift, simSeconds } = useSim();
+  const { isPreSorteio, currentShift, simSeconds, getCurrentTime } = useSim();
   const waiting = queue.filter((e) => e.queue_status === 'aguardando');
   const calling = allQueue.filter((e) => e.queue_status === 'chamando');
   const inAttendance = allQueue.filter((e) => e.queue_status === 'em_atendimento');
@@ -111,7 +111,7 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
       // 3 strikes → broker is paused (not just pausa), next broker from same queue
       const isLastAttempt = entry.attempts >= 3;
       if (isLastAttempt) {
-        await supabase.from('brokers').update({ presence_status: 'pausa', attendance_status: 'livre', last_status_update: new Date().toISOString() }).eq('id', entry.broker_id);
+        await supabase.from('brokers').update({ presence_status: 'pausa', attendance_status: 'livre', absence_started_at: getCurrentTime().toISOString(), last_status_update: new Date().toISOString() }).eq('id', entry.broker_id);
       } else {
         await supabase.from('brokers').update({ attendance_status: 'livre', last_status_update: new Date().toISOString() }).eq('id', entry.broker_id);
       }

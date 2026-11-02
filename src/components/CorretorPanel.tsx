@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { UserCheck, UserX, Clock, Coffee, Table2, Chrome as Home, CircleCheck as CheckCircle, Plus, Trash2, ExternalLink, Users as Users2, Sun, Moon, Bookmark, Eye } from 'lucide-react';
 import { supabase, type Broker, type BrokerPresence, type AttendanceStatus, type Agency, type Shift } from '@/lib/supabase';
-import { AGENCIES, isLateForSort, isBeyondBarrier, pushLateBrokerToQueues, reenterDirectQueueFromPausa, equipesForAgency, BARRIER_MANHA, BARRIER_TARDE } from '@/lib/queueEngine';
+import { AGENCIES, isLateForSort, isBeyondBarrier, pushLateBrokerToQueues, reenterDirectQueue, equipesForAgency, BARRIER_MANHA, BARRIER_TARDE } from '@/lib/queueEngine';
 import { useSim } from '@/lib/simContext';
 
 type Props = { brokers: Broker[] };
@@ -33,6 +33,8 @@ export default function CorretorPanel({ brokers }: Props) {
   async function updatePresence(broker: Broker, status: BrokerPresence) {
     const now = getCurrentTime().toISOString();
     const updates: Partial<Broker> & { last_status_update: string } = { presence_status: status, last_status_update: now };
+    if (status === 'presente') updates.absence_started_at = null;
+    else if (broker.presence_status === 'presente') updates.absence_started_at = now;
     if (status === 'presente' && !broker.arrived_at) {
       updates.arrived_at = now;
       updates.shift = currentShift;
@@ -49,8 +51,8 @@ export default function CorretorPanel({ brokers }: Props) {
       }
     }
     await supabase.from('brokers').update(updates).eq('id', broker.id);
-    if (status === 'presente' && broker.presence_status === 'pausa') {
-      await reenterDirectQueueFromPausa(broker.id, internalBrokers);
+    if (status === 'presente' && (broker.presence_status === 'pausa' || broker.presence_status === 'ausente')) {
+      await reenterDirectQueue(broker.id, internalBrokers);
     }
   }
 

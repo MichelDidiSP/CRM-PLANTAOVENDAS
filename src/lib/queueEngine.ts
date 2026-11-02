@@ -29,6 +29,28 @@ export function isApenasIndicacao(broker: Broker): boolean {
   return broker.attendance_status === 'apenas_indicacao';
 }
 
+export function isRotationExcluded(broker: Broker): boolean {
+  return isApenasIndicacao(broker) || broker.only_own_referrals;
+}
+
+export const ABSENCE_PENALTY_MINUTES = 120;
+
+export function isAbsencePenaltyDue(broker: Broker, now: Date): boolean {
+  if (broker.is_external_partner || broker.presence_status === 'presente' || broker.only_own_referrals) return false;
+  if (!broker.absence_started_at) return false;
+  const elapsedMs = now.getTime() - new Date(broker.absence_started_at).getTime();
+  return elapsedMs > ABSENCE_PENALTY_MINUTES * 60_000;
+}
+
+export async function enforceAbsencePenalties(brokers: Broker[], now: Date): Promise<void> {
+  for (const broker of brokers.filter((b) => isAbsencePenaltyDue(b, now))) {
+    await supabase
+      .from('brokers')
+      .update({ sorteio_order: null, inverse_order: null, only_own_referrals: true })
+      .eq('id', broker.id);
+  }
+}
+
 export function isLateCheckIn(broker: Broker): boolean {
   return broker.arrived_at != null && isLateForSort(broker.arrived_at, broker.shift ?? 'manha');
 }
@@ -346,6 +368,8 @@ export async function reiniciarPlantao(brokers: Broker[]): Promise<void> {
         arrived_at: null,
         shift: null,
         afternoon_reserved: false,
+        absence_started_at: null,
+        only_own_referrals: false,
         last_status_update: new Date().toISOString(),
       })
       .eq('id', broker.id);
@@ -384,7 +408,7 @@ export async function transitionToAfternoon(brokers: Broker[]): Promise<void> {
     if (inAttendance) {
       await supabase
         .from('brokers')
-        .update({ afternoon_reserved: true, shift: null })
+        .update({ afternoon_reserved: true, shift: null, only_own_referrals: false })
         .eq('id', broker.id);
     } else {
       await supabase
@@ -397,6 +421,8 @@ export async function transitionToAfternoon(brokers: Broker[]): Promise<void> {
           inverse_order: null,
           shift: null,
           afternoon_reserved: false,
+          absence_started_at: null,
+          only_own_referrals: false,
           last_status_update: new Date().toISOString(),
         })
         .eq('id', broker.id);
@@ -501,7 +527,7 @@ function sortKey(entries: QueueEntry[], brokers: Broker[], entry: QueueEntry): n
  */
 export function nextBrokerFromAgency(brokers: Broker[], agency: Agency, excludeIds: Set<string>): Broker | undefined {
   const agencyBrokers = brokers
-    .filter((b) => !b.is_external_partner && b.agency === agency && b.presence_status === 'presente' && b.attendance_status === 'livre' && !isApenasIndicacao(b) && !excludeIds.has(b.id))
+    .filter((b) => !b.is_external_partner && b.agency === agency && b.presence_status === 'presente' && b.attendance_status === 'livre' && !isRotationExcluded(b) && !excludeIds.has(b.id))
     .sort((a, b) => (a.sorteio_order ?? 999_999) - (b.sorteio_order ?? 999_999));
 
   return agencyBrokers[0];
@@ -538,7 +564,7 @@ export function nextBrokerForGeneralQueue(
 
 export function nextBrokerByArrival(brokers: Broker[], agency: Agency, excludeIds: Set<string>): Broker | undefined {
   const agencyBrokers = brokers
-    .filter((b) => !b.is_external_partner && b.agency === agency && b.presence_status === 'presente' && b.attendance_status === 'livre' && !excludeIds.has(b.id))
+    .filter((b) => !b.is_external_partner && b.agency === agency && b.presence_status === 'presente' && b.attendance_status === 'livre' && !isRotationExcluded(b) && !excludeIds.has(b.id))
     .sort((a, b) => {
       const aTime = a.arrived_at ? new Date(a.arrived_at).getTime() : Infinity;
       const bTime = b.arrived_at ? new Date(b.arrived_at).getTime() : Infinity;
@@ -550,7 +576,7 @@ export function nextBrokerByArrival(brokers: Broker[], agency: Agency, excludeId
 
 export function nextBrokerByArrivalAnyAgency(brokers: Broker[], excludeIds: Set<string>): Broker | undefined {
   const available = brokers
-    .filter((b) => !b.is_external_partner && b.presence_status === 'presente' && b.attendance_status === 'livre' && !isApenasIndicacao(b) && !excludeIds.has(b.id))
+    .filter((b) => !b.is_external_partner && b.presence_status === 'presente' && b.attendance_status === 'livre' && !isRotationExcluded(b) && !excludeIds.has(b.id))
     .sort((a, b) => {
       const aTime = a.arrived_at ? new Date(a.arrived_at).getTime() : Infinity;
       const bTime = b.arrived_at ? new Date(b.arrived_at).getTime() : Infinity;
@@ -562,7 +588,7 @@ export function nextBrokerByArrivalAnyAgency(brokers: Broker[], excludeIds: Set<
 
 export function nextBrokerByArrivalInverse(brokers: Broker[], excludeIds: Set<string>): Broker | undefined {
   const available = brokers
-    .filter((b) => !b.is_external_partner && b.presence_status === 'presente' && b.attendance_status === 'livre' && !isApenasIndicacao(b) && !excludeIds.has(b.id))
+    .filter((b) => !b.is_external_partner && b.presence_status === 'presente' && b.attendance_status === 'livre' && !isRotationExcluded(b) && !excludeIds.has(b.id))
     .sort((a, b) => {
       const aTime = a.arrived_at ? new Date(a.arrived_at).getTime() : -Infinity;
       const bTime = b.arrived_at ? new Date(b.arrived_at).getTime() : -Infinity;
@@ -574,7 +600,7 @@ export function nextBrokerByArrivalInverse(brokers: Broker[], excludeIds: Set<st
 
 export function lastBrokerFromAgency(brokers: Broker[], agency: Agency, excludeIds: Set<string>): Broker | undefined {
   const agencyBrokers = brokers
-    .filter((b) => !b.is_external_partner && b.agency === agency && b.presence_status === 'presente' && b.attendance_status === 'livre' && !isApenasIndicacao(b) && !excludeIds.has(b.id))
+    .filter((b) => !b.is_external_partner && b.agency === agency && b.presence_status === 'presente' && b.attendance_status === 'livre' && !isRotationExcluded(b) && !excludeIds.has(b.id))
     .sort((a, b) => (b.sorteio_order ?? 0) - (a.sorteio_order ?? 0));
 
   const onTime = agencyBrokers.filter((b) => !isLateCheckIn(b));
@@ -589,7 +615,7 @@ export function lastBrokerFromAgency(brokers: Broker[], agency: Agency, excludeI
  */
 export function lastBrokerFromTeam(brokers: Broker[], equipe: string, excludeIds: Set<string>): Broker | undefined {
   const teamBrokers = brokers
-    .filter((b) => !b.is_external_partner && b.equipe === equipe && b.presence_status === 'presente' && b.attendance_status === 'livre' && !isApenasIndicacao(b) && !excludeIds.has(b.id))
+    .filter((b) => !b.is_external_partner && b.equipe === equipe && b.presence_status === 'presente' && b.attendance_status === 'livre' && !isRotationExcluded(b) && !excludeIds.has(b.id))
     .sort((a, b) => (b.sorteio_order ?? 0) - (a.sorteio_order ?? 0));
 
   return teamBrokers.find((b) => !isLateCheckIn(b));
@@ -648,11 +674,11 @@ export async function pushLateBrokerToQueues(brokerId: string, brokers: Broker[]
 }
 
 /**
- * Re-entry from Pausa to Presente in the company's direct queue.
+ * Re-entry from Pausa or Ausente to Presente in the company's direct queue.
  * - Turn already passed, or returning exactly at the next turn: placed immediately after the broker being served.
  * - Returning earlier: keeps the original position.
  */
-export async function reenterDirectQueueFromPausa(brokerId: string, brokers: Broker[]): Promise<void> {
+export async function reenterDirectQueue(brokerId: string, brokers: Broker[]): Promise<void> {
   const broker = brokers.find((b) => b.id === brokerId);
   if (!broker || broker.is_external_partner || broker.sorteio_order == null) return;
 
@@ -840,7 +866,7 @@ export async function moveBrokerToEndOfQueue(brokerId: string, brokers: Broker[]
  */
 export function nextBrokerFromInverseTop(brokers: Broker[], excludeIds: Set<string>): Broker | undefined {
   const present = brokers.filter(
-    (b) => !b.is_external_partner && b.presence_status === 'presente' && !isApenasIndicacao(b) && !excludeIds.has(b.id),
+    (b) => !b.is_external_partner && b.presence_status === 'presente' && !isRotationExcluded(b) && !excludeIds.has(b.id),
   );
 
   // Sort by inverse_order ascending — the inverse queue's own independent numbering
@@ -868,13 +894,13 @@ export function nextBrokerFromInverseQueue(brokers: Broker[], sortedQueue: Queue
   for (const entry of reversed) {
     if (entry.broker_id) {
       const broker = brokers.find((b) => b.id === entry.broker_id);
-      if (broker && !broker.is_external_partner && broker.presence_status === 'presente' && broker.attendance_status === 'livre' && !isApenasIndicacao(broker)) {
+      if (broker && !broker.is_external_partner && broker.presence_status === 'presente' && broker.attendance_status === 'livre' && !isRotationExcluded(broker)) {
         return broker;
       }
     }
   }
   return brokers.find(
-    (b) => !b.is_external_partner && b.presence_status === 'presente' && b.attendance_status === 'livre' && !isApenasIndicacao(b),
+    (b) => !b.is_external_partner && b.presence_status === 'presente' && b.attendance_status === 'livre' && !isRotationExcluded(b),
   );
 }
 
