@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { UserCheck, UserX, Clock, Coffee, Table2, Chrome as Home, CircleCheck as CheckCircle, Plus, Trash2, ExternalLink, Users as Users2, Sun, Moon, Bookmark, Eye } from 'lucide-react';
 import { supabase, type Broker, type BrokerPresence, type AttendanceStatus, type Agency, type Shift } from '@/lib/supabase';
-import { AGENCIES, isLateForSort, isBeyondBarrier, pushLateBrokerToQueues, reenterDirectQueue, equipesForAgency, BARRIER_MANHA, BARRIER_TARDE } from '@/lib/queueEngine';
+import { AGENCIES, isLateForSort, isBeyondBarrier, pushLateBrokerToQueues, reenterDirectQueue, logAfternoonAbandonment, markBrokerReturned, equipesForAgency, BARRIER_MANHA, BARRIER_TARDE } from '@/lib/queueEngine';
 import { useSim } from '@/lib/simContext';
 
 type Props = { brokers: Broker[] };
@@ -35,6 +35,12 @@ export default function CorretorPanel({ brokers }: Props) {
     const updates: Partial<Broker> & { last_status_update: string } = { presence_status: status, last_status_update: now };
     if (status === 'presente') updates.absence_started_at = null;
     else if (broker.presence_status === 'presente') updates.absence_started_at = now;
+    if (broker.presence_status === 'presente' && status === 'ausente' && broker.shift === 'tarde' && broker.sorteio_order != null) {
+      await logAfternoonAbandonment(broker, getCurrentTime());
+    }
+    if (status === 'presente' && broker.presence_status !== 'presente') {
+      await markBrokerReturned(broker.id, getCurrentTime());
+    }
     if (status === 'presente' && !broker.arrived_at) {
       updates.arrived_at = now;
       updates.shift = currentShift;

@@ -51,6 +51,30 @@ export async function enforceAbsencePenalties(brokers: Broker[], now: Date): Pro
   }
 }
 
+export async function logAfternoonAbandonment(broker: Broker, now: Date): Promise<void> {
+  const activeMinutes = broker.arrived_at
+    ? Math.max(0, Math.round((now.getTime() - new Date(broker.arrived_at).getTime()) / 60_000))
+    : 0;
+  await supabase.from('broker_shift_compliance').insert({
+    broker_id: broker.id,
+    broker_name: broker.operational_name,
+    agency: broker.agency,
+    plantao_date: now.toISOString().slice(0, 10),
+    shift: 'tarde',
+    arrived_at: broker.arrived_at,
+    left_at: now.toISOString(),
+    active_minutes: activeMinutes,
+  });
+}
+
+export async function markBrokerReturned(brokerId: string, now: Date): Promise<void> {
+  await supabase
+    .from('broker_shift_compliance')
+    .update({ returned_at: now.toISOString() })
+    .eq('broker_id', brokerId)
+    .is('returned_at', null);
+}
+
 export function isLateCheckIn(broker: Broker): boolean {
   return broker.arrived_at != null && isLateForSort(broker.arrived_at, broker.shift ?? 'manha');
 }
