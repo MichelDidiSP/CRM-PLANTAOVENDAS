@@ -10,7 +10,7 @@ type Props = {
 };
 
 export default function ChamadasPanel({ queue, brokers }: Props) {
-  const { callDuration, testMode, getCurrentTime } = useSim();
+  const { callDuration, testMode } = useSim();
   const [currentCall, setCurrentCall] = useState<QueueEntry | null>(null);
   const [remaining, setRemaining] = useState(callDuration);
   const [attempts, setAttempts] = useState(0);
@@ -67,7 +67,6 @@ export default function ChamadasPanel({ queue, brokers }: Props) {
         .update({
           presence_status: 'pausa',
           attendance_status: 'livre',
-          absence_started_at: getCurrentTime().toISOString(),
           last_status_update: new Date().toISOString(),
         })
         .eq('id', currentCall.broker_id);

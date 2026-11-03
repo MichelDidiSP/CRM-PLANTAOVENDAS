@@ -25,8 +25,6 @@ function createSeedData(): Record<string, Row[]> {
     inverse_order: null,
     shift: null,
     afternoon_reserved: false,
-    absence_started_at: null,
-    only_own_referrals: false,
     created_at: now,
   });
   return {

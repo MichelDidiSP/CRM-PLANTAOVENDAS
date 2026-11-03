@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { Building2, DoorOpen, Tv, Users, ListOrdered, Zap, Clock, Plus, Shuffle, ClipboardList, RefreshCw, FileText, X, Trophy, Calendar, Sun, Moon, ArrowRight, Home, Database, TriangleAlert as AlertTriangle } from 'lucide-react';
 import { supabase, dbReady, type Broker, type QueueEntry, type Visit, type PlantaoSession } from '@/lib/supabase';
-import { fetchAll, interleaveQueue, executeSorteio, reiniciarPlantao, transitionToAfternoon, exportRelatorioFechamento, isLateForSort, hasAfternoonCheckIn, enforceAbsencePenalties, ATENDIMENTO_TARDE_START, type SorteioResult } from '@/lib/queueEngine';
+import { fetchAll, interleaveQueue, executeSorteio, reiniciarPlantao, transitionToAfternoon, exportRelatorioFechamento, isLateForSort, hasAfternoonCheckIn, ATENDIMENTO_TARDE_START, type SorteioResult } from '@/lib/queueEngine';
 import { SimProvider, useSim } from '@/lib/simContext';
 
 import RecepcaoPanel from '@/components/RecepcaoPanel';
@@ -12,7 +12,7 @@ import FilaPanel from '@/components/FilaPanel';
 type View = 'recepcao' | 'chamadas' | 'corretor' | 'fila' | 'auditoria';
 
 function AppContent() {
-  const { clockDisplay, setStartTime, addMinute, jumpToAfternoon, testMode, setTestMode, sorteioTriggered, resetClock, simSeconds, currentShift, isWeekday, plantaoDate, setPlantaoDate, isPreSorteio, isCheckinOpen, isAtendimentoActive, isShiftTransition, isAfternoonActive, isMorningQueueActive, getCurrentTime } = useSim();
+  const { clockDisplay, setStartTime, addMinute, jumpToAfternoon, testMode, setTestMode, sorteioTriggered, resetClock, simSeconds, currentShift, isWeekday, plantaoDate, setPlantaoDate, isPreSorteio, isCheckinOpen, isAtendimentoActive, isShiftTransition, isAfternoonActive, isMorningQueueActive } = useSim();
   const [view, setView] = useState<View>('recepcao');
   const [brokers, setBrokers] = useState<Broker[]>([]);
   const [visits, setVisits] = useState<Visit[]>([]);
@@ -66,11 +66,6 @@ function AppContent() {
       supabase.removeChannel(channel);
     };
   }, [load]);
-
-  // Sorteio automático
-  useEffect(() => {
-    if (brokers.length > 0) enforceAbsencePenalties(brokers, getCurrentTime());
-  }, [brokers, simSeconds, getCurrentTime]);
 
   // Sorteio automático
   useEffect(() => {
