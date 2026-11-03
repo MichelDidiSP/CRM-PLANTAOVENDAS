@@ -702,25 +702,36 @@ export async function pushLateBrokerToQueues(brokerId: string, brokers: Broker[]
  * - Turn already passed, or returning exactly at the next turn: placed immediately after the broker being served.
  * - Returning earlier: keeps the original position.
  */
-export async function reenterDirectQueue(brokerId: string, brokers: Broker[]): Promise<void> {
+export function repositionBehindTurn(brokers: Broker[], brokerId: string): Map<string, number> {
   const broker = brokers.find((b) => b.id === brokerId);
-  if (!broker || broker.is_external_partner || broker.sorteio_order == null) return;
+  if (!broker || broker.is_external_partner || broker.sorteio_order == null) return new Map();
 
-  const served = brokers.find(
-    (b) => !b.is_external_partner && b.agency === broker.agency && b.id !== brokerId && b.sorteio_order != null && (b.attendance_status === 'em_mesa' || b.attendance_status === 'em_atendimento'),
+  const queue = brokers
+    .filter((b) => !b.is_external_partner && b.agency === broker.agency && b.sorteio_order != null)
+    .sort((a, b) => (a.sorteio_order ?? 0) - (b.sorteio_order ?? 0));
+
+  const served = queue.find(
+    (b) => b.id !== brokerId && (b.attendance_status === 'em_mesa' || b.attendance_status === 'em_atendimento'),
   );
-  if (!served || served.sorteio_order == null) return;
+  if (!served || served.sorteio_order == null || broker.sorteio_order > served.sorteio_order + 1) return new Map();
 
-  const newOrder = served.sorteio_order + 1;
-  if (broker.sorteio_order >= newOrder) return;
+  const rest = queue.filter((b) => b.id !== brokerId);
+  const servedIndex = rest.findIndex((b) => b.id === served.id);
+  const reordered = [...rest.slice(0, servedIndex + 1), broker, ...rest.slice(servedIndex + 1)];
 
-  const shifted = brokers.filter(
-    (b) => !b.is_external_partner && b.agency === broker.agency && b.id !== brokerId && b.sorteio_order != null && b.sorteio_order >= newOrder,
-  );
-  for (const b of shifted) {
-    await supabase.from('brokers').update({ sorteio_order: (b.sorteio_order ?? 0) + 1 }).eq('id', b.id);
+  const slots = queue.map((b) => b.sorteio_order ?? 0);
+  const changes = new Map<string, number>();
+  reordered.forEach((b, i) => {
+    if (b.sorteio_order !== slots[i]) changes.set(b.id, slots[i]);
+  });
+  return changes;
+}
+
+export async function reenterDirectQueue(brokerId: string, brokers: Broker[]): Promise<void> {
+  const changes = repositionBehindTurn(brokers, brokerId);
+  for (const [id, sorteioOrder] of changes) {
+    await supabase.from('brokers').update({ sorteio_order: sorteioOrder }).eq('id', id);
   }
-  await supabase.from('brokers').update({ sorteio_order: newOrder }).eq('id', brokerId);
 }
 
 export function resolveIndicacaoBroker(
