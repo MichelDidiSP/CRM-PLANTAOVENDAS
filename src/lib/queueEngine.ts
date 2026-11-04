@@ -493,18 +493,26 @@ function sortKey(entries: QueueEntry[], brokers: Broker[], entry: QueueEntry): n
   return priorityOffset + new Date(entry.created_at).getTime();
 }
 
+function eligibleBrokersFromAgency(brokers: Broker[], agency: Agency, excludeIds: Set<string>): Broker[] {
+  return brokers
+    .filter((b) => !b.is_external_partner && b.agency === agency && b.presence_status === 'presente' && b.attendance_status === 'livre' && !isApenasIndicacao(b) && !excludeIds.has(b.id))
+    .sort((a, b) => (a.sorteio_order ?? 999_999) - (b.sorteio_order ?? 999_999));
+}
+
 /**
  * Returns the broker at the CURRENT TOP (index 0) of a specific company's
  * direct queue — i.e. the Livre broker with the lowest sorteio_order
  * within that agency. Brokers with status em_mesa, em_atendimento,
  * decorado, encerrado, pausa, or apenas_indicacao are skipped.
+ *
+ * Returning-from-pause brokers are deferred: a non-returning colleague
+ * from the same agency is always preferred. Only if no non-returning
+ * broker is available does a returning broker get dispatched.
  */
 export function nextBrokerFromAgency(brokers: Broker[], agency: Agency, excludeIds: Set<string>): Broker | undefined {
-  const agencyBrokers = brokers
-    .filter((b) => !b.is_external_partner && b.agency === agency && b.presence_status === 'presente' && b.attendance_status === 'livre' && !isApenasIndicacao(b) && !excludeIds.has(b.id))
-    .sort((a, b) => (a.sorteio_order ?? 999_999) - (b.sorteio_order ?? 999_999));
-
-  return agencyBrokers[0];
+  const sorted = eligibleBrokersFromAgency(brokers, agency, excludeIds);
+  const nonReturning = sorted.filter((b) => !b.returning_from_pause);
+  return nonReturning[0] ?? sorted[0];
 }
 
 /**
@@ -645,6 +653,27 @@ export async function pushLateBrokerToQueues(brokerId: string, brokers: Broker[]
       setAfternoonInverseQueue([...afternoonInverse, brokerId]);
     }
   }
+}
+
+/**
+ * Non-destructive re-entry from Pausa/Ausente to Presente.
+ * Instead of reordering sorteio_order or splicing arrays, this sets a
+ * `returning_from_pause` flag. Dispatch defers flagged brokers behind any
+ * non-returning same-company colleague. The flag is cleared once the broker
+ * is actually dispatched to a client.
+ */
+export async function markReturningFromPause(brokerId: string): Promise<void> {
+  await supabase
+    .from('brokers')
+    .update({ returning_from_pause: true })
+    .eq('id', brokerId);
+}
+
+export async function clearReturningFlag(brokerId: string): Promise<void> {
+  await supabase
+    .from('brokers')
+    .update({ returning_from_pause: false })
+    .eq('id', brokerId);
 }
 
 export function resolveIndicacaoBroker(
@@ -827,14 +856,9 @@ export function nextBrokerFromInverseTop(brokers: Broker[], excludeIds: Set<stri
   const fullQueue: Broker[] = [...sorted];
   for (const b of noOrder) fullQueue.push(b);
 
-  // Strictly return the broker at index 0 if they are Livre
-  const topBroker = fullQueue[0];
-  if (!topBroker) return undefined;
-
-  if (topBroker.attendance_status === 'livre') return topBroker;
-
-  // Top broker is busy — find next Livre in the inverse queue (regardless of brand)
-  return fullQueue.find((b) => b.attendance_status === 'livre');
+  const livreQueue = fullQueue.filter((b) => b.attendance_status === 'livre');
+  const nonReturning = livreQueue.filter((b) => !b.returning_from_pause);
+  return nonReturning[0] ?? livreQueue[0];
 }
 
 export function nextBrokerFromInverseQueue(brokers: Broker[], sortedQueue: QueueEntry[]): Broker | undefined {

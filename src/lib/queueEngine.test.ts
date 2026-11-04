@@ -46,6 +46,7 @@ function makeBroker(
     inverse_order: null,
     shift: 'manha',
     afternoon_reserved: false,
+    returning_from_pause: false,
     created_at: '2026-09-20T08:00:00.000Z',
     ...opts,
   };

@@ -69,6 +69,7 @@ export type Broker = {
   inverse_order: number | null;
   shift: Shift | null;
   afternoon_reserved: boolean;
+  returning_from_pause: boolean;
   created_at: string;
 };
 

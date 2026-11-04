@@ -325,7 +325,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
     if (assignedBrokerId) {
       await supabase
         .from('brokers')
-        .update({ attendance_status: 'em_mesa', last_status_update: simTimestamp })
+        .update({ attendance_status: 'em_mesa', returning_from_pause: false, last_status_update: simTimestamp })
         .eq('id', assignedBrokerId);
       await supabase.from('visits').update({ status: 'aguardando_chamada' }).eq('id', visitData.id);
     }
