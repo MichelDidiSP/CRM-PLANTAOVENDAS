@@ -147,7 +147,7 @@ export default function ChamadasPanel({ queue, brokers }: Props) {
       if (nextBrokerId) {
         await supabase
           .from('brokers')
-          .update({ attendance_status: 'em_mesa', returning_from_pause: false, last_status_update: new Date().toISOString() })
+          .update({ attendance_status: 'em_mesa', last_status_update: new Date().toISOString() })
           .eq('id', nextBrokerId);
       }
     }, 1500);

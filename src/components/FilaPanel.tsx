@@ -44,7 +44,7 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
       await supabase.from('visits').update({ status: 'aguardando_chamada' }).eq('id', entry.visit_id);
     }
     if (brokerId) {
-      await supabase.from('brokers').update({ attendance_status: 'em_mesa', returning_from_pause: false, last_status_update: new Date().toISOString() }).eq('id', brokerId);
+      await supabase.from('brokers').update({ attendance_status: 'em_mesa', last_status_update: new Date().toISOString() }).eq('id', brokerId);
     }
   }
 

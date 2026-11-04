@@ -114,6 +114,18 @@ const allBrokers = [...vivaBrokers, ...nobreBrokers];
 // Post-sorteio dispatch time: after 09:00h when the roleta takes command
 const POST_SORTEIO_TIME = ATENDIMENTO_MANHA_START + 10 * 60; // 09:10:00
 
+if (typeof globalThis.localStorage === 'undefined') {
+  const store = new Map<string, string>();
+  globalThis.localStorage = {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => { store.set(k, String(v)); },
+    removeItem: (k: string) => { store.delete(k); },
+    clear: () => store.clear(),
+    key: (i: number) => [...store.keys()][i] ?? null,
+    get length() { return store.size; },
+  } as unknown as Storage;
+}
+
 beforeEach(() => {
   resetCompanyRotation();
   setCompanyDrawOrder(['Viva Imóveis', 'Casa Nobre']);
