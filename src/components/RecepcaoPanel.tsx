@@ -14,6 +14,7 @@ import {
   nextBrokerByArrivalInverse,
   nextBrokerForGeneralQueue,
   resolveIndicacaoBroker,
+  markBrokerInService,
   resolveApenasImobiliariaBroker,
   dispatchBroker,
   isArrivalOrderDispatchActive,
@@ -323,10 +324,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
     await supabase.from('queue_entries').insert(insertData);
 
     if (assignedBrokerId) {
-      await supabase
-        .from('brokers')
-        .update({ attendance_status: 'em_mesa', last_status_update: simTimestamp })
-        .eq('id', assignedBrokerId);
+      await markBrokerInService(brokers, assignedBrokerId, simTimestamp);
       await supabase.from('visits').update({ status: 'aguardando_chamada' }).eq('id', visitData.id);
     }
 

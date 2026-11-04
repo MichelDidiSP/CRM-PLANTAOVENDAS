@@ -218,6 +218,40 @@ describe('Pre-Sorteio Arrival Order (Rule 1 — before 08:46h)', () => {
   });
 });
 
+describe('Pausa return: deferred behind next same-company colleague', () => {
+  const clearVivaFlags = (brokers: Broker[], servedId: string) =>
+    brokers.map((b) =>
+      b.agency === 'Viva Imóveis'
+        ? { ...b, returning_from_pause: false, attendance_status: b.id === servedId ? ('em_mesa' as const) : b.attendance_status }
+        : b,
+    );
+
+  it('returning head yields to next free colleague, then takes the client after it', () => {
+    const returning = allBrokers.map((b) => (b.id === 'v1' ? { ...b, returning_from_pause: true } : b));
+    expect(nextBrokerFromAgency(returning, 'Viva Imóveis', new Set())?.id).toBe('v2');
+
+    const afterV2 = clearVivaFlags(returning, 'v2');
+    expect(nextBrokerFromAgency(afterV2, 'Viva Imóveis', new Set())?.id).toBe('v1');
+  });
+
+  it('returning broker with no free colleague is served directly', () => {
+    const onlyReturning = allBrokers.map((b) =>
+      b.agency === 'Viva Imóveis' && b.id !== 'v1' ? { ...b, attendance_status: 'em_mesa' as const } : b.id === 'v1' ? { ...b, returning_from_pause: true } : b,
+    );
+    expect(nextBrokerFromAgency(onlyReturning, 'Viva Imóveis', new Set())?.id).toBe('v1');
+  });
+
+  it('concurrent returns keep line order', () => {
+    const concurrent = allBrokers.map((b) =>
+      b.id === 'v1' || b.id === 'v2' ? { ...b, returning_from_pause: true } : b,
+    );
+    expect(nextBrokerFromAgency(concurrent, 'Viva Imóveis', new Set())?.id).toBe('v3');
+
+    const afterV3 = clearVivaFlags(concurrent, 'v3');
+    expect(nextBrokerFromAgency(afterV3, 'Viva Imóveis', new Set())?.id).toBe('v1');
+  });
+});
+
 describe('Pós-Sorteio: Three Isolated Queues (Rule 3)', () => {
   it('Vez Geral: rotation pointer at 0 (Viva) → top of Viva direct queue (v1)', () => {
     const result = dispatchBroker(allBrokers, 'geral', POST_SORTEIO_TIME, new Set(), null, null);

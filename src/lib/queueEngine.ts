@@ -500,12 +500,23 @@ function sortKey(entries: QueueEntry[], brokers: Broker[], entry: QueueEntry): n
  * decorado, encerrado, pausa, or apenas_indicacao are skipped, and the
  * next free broker in line order takes the client.
  */
-export function nextBrokerFromAgency(brokers: Broker[], agency: Agency, excludeIds: Set<string>): Broker | undefined {
-  const agencyBrokers = brokers
+function eligibleBrokersFromAgency(brokers: Broker[], agency: Agency, excludeIds: Set<string>): Broker[] {
+  return brokers
     .filter((b) => !b.is_external_partner && b.agency === agency && b.presence_status === 'presente' && b.attendance_status === 'livre' && !isApenasIndicacao(b) && !excludeIds.has(b.id))
     .sort((a, b) => (a.sorteio_order ?? 999_999) - (b.sorteio_order ?? 999_999));
+}
 
-  return agencyBrokers[0];
+/**
+ * A broker returning from Pausa on their turn yields once to the next free colleague;
+ * their flag is cleared when that colleague is served, so they take the client after it.
+ */
+export function nextBrokerFromAgency(brokers: Broker[], agency: Agency, excludeIds: Set<string>): Broker | undefined {
+  const [head, ...rest] = eligibleBrokersFromAgency(brokers, agency, excludeIds);
+  if (head?.returning_from_pause) {
+    const colleague = rest.find((b) => !b.returning_from_pause);
+    if (colleague) return colleague;
+  }
+  return head;
 }
 
 /**
@@ -648,6 +659,21 @@ export async function pushLateBrokerToQueues(brokerId: string, brokers: Broker[]
   }
 }
 
+export async function markReturningFromPause(brokerId: string, brokers: Broker[]): Promise<void> {
+  const broker = brokers.find((b) => b.id === brokerId);
+  if (!broker) return;
+  const [head] = eligibleBrokersFromAgency(brokers, broker.agency, new Set([brokerId]));
+  const turnPassedOrNow = head !== undefined && (broker.sorteio_order ?? 999_999) <= (head.sorteio_order ?? 999_999);
+  await supabase.from('brokers').update({ returning_from_pause: turnPassedOrNow }).eq('id', brokerId);
+}
+
+export async function markBrokerInService(brokers: Broker[], brokerId: string, timestamp: string): Promise<void> {
+  await supabase.from('brokers').update({ attendance_status: 'em_mesa', last_status_update: timestamp }).eq('id', brokerId);
+  const broker = brokers.find((b) => b.id === brokerId);
+  if (!broker) return;
+  await supabase.from('brokers').update({ returning_from_pause: false }).eq('agency', broker.agency).eq('returning_from_pause', true);
+}
+
 export function resolveIndicacaoBroker(
   brokers: Broker[],
   referredBrokerId: string | null,
@@ -667,8 +693,8 @@ export function resolveIndicacaoBroker(
     return { broker: referred, consumesVez: false, source: 'named', equipe: referred.equipe, protectedPosition: true };
   }
 
-  // Step 2: named broker is busy or absent → LAST available from SAME TEAM (present at project)
-  const sameTeam = lastBrokerFromTeam(brokers, referred.equipe, excludeIds);
+  // Step 2: named broker is busy or absent → LAST available from SAME COMPANY and SAME TEAM (company has priority)
+  const sameTeam = lastBrokerFromTeam(brokers.filter((b) => b.agency === referred.agency), referred.equipe, excludeIds);
   if (sameTeam) {
     return { broker: sameTeam, consumesVez: false, source: 'same_team', equipe: referred.equipe, protectedPosition: true };
   }
