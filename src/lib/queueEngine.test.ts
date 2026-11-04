@@ -218,37 +218,39 @@ describe('Pre-Sorteio Arrival Order (Rule 1 — before 08:46h)', () => {
   });
 });
 
-describe('Pausa return: deferred behind next same-company colleague', () => {
-  const clearVivaFlags = (brokers: Broker[], servedId: string) =>
-    brokers.map((b) =>
-      b.agency === 'Viva Imóveis'
-        ? { ...b, returning_from_pause: false, attendance_status: b.id === servedId ? ('em_mesa' as const) : b.attendance_status }
-        : b,
-    );
+describe('Company cursor and pause return (Primeira Visita)', () => {
+  const served = (brokers: Broker[], ids: string[]) =>
+    brokers.map((b) => (ids.includes(b.id) ? { ...b, attendance_status: 'em_mesa' as const } : b));
+  const flagged = (brokers: Broker[], ids: string[]) =>
+    brokers.map((b) => (ids.includes(b.id) ? { ...b, returning_from_pause: true } : b));
 
-  it('returning head yields to next free colleague, then takes the client after it', () => {
-    const returning = allBrokers.map((b) => (b.id === 'v1' ? { ...b, returning_from_pause: true } : b));
-    expect(nextBrokerFromAgency(returning, 'Viva Imóveis', new Set())?.id).toBe('v2');
+  it('busy scheduled broker is bypassed to the next free colleague in line order', () => {
+    expect(nextBrokerFromAgency(allBrokers, 'Viva Imóveis', new Set())?.id).toBe('v1');
+    expect(nextBrokerFromAgency(served(allBrokers, ['v2']), 'Viva Imóveis', new Set())?.id).toBe('v3');
+  });
 
-    const afterV2 = clearVivaFlags(returning, 'v2');
-    expect(nextBrokerFromAgency(afterV2, 'Viva Imóveis', new Set())?.id).toBe('v1');
+  it('pointer moves past the bypass, so the bypassed broker returns on the next round', () => {
+    nextBrokerFromAgency(allBrokers, 'Viva Imóveis', new Set());
+    nextBrokerFromAgency(served(allBrokers, ['v2']), 'Viva Imóveis', new Set());
+    expect(nextBrokerFromAgency(allBrokers, 'Viva Imóveis', new Set())?.id).toBe('v4');
+  });
+
+  it('returning broker on turn yields once to the next free colleague, then takes the client after it', () => {
+    const state = flagged(allBrokers, ['v1']);
+    expect(nextBrokerFromAgency(state, 'Viva Imóveis', new Set())?.id).toBe('v2');
+    expect(nextBrokerFromAgency(served(state, ['v2']), 'Viva Imóveis', new Set())?.id).toBe('v1');
   });
 
   it('returning broker with no free colleague is served directly', () => {
-    const onlyReturning = allBrokers.map((b) =>
-      b.agency === 'Viva Imóveis' && b.id !== 'v1' ? { ...b, attendance_status: 'em_mesa' as const } : b.id === 'v1' ? { ...b, returning_from_pause: true } : b,
-    );
-    expect(nextBrokerFromAgency(onlyReturning, 'Viva Imóveis', new Set())?.id).toBe('v1');
+    const state = served(flagged(allBrokers, ['v1']), ['v2', 'v3', 'v4', 'v5']);
+    expect(nextBrokerFromAgency(state, 'Viva Imóveis', new Set())?.id).toBe('v1');
   });
 
   it('concurrent returns keep line order', () => {
-    const concurrent = allBrokers.map((b) =>
-      b.id === 'v1' || b.id === 'v2' ? { ...b, returning_from_pause: true } : b,
-    );
-    expect(nextBrokerFromAgency(concurrent, 'Viva Imóveis', new Set())?.id).toBe('v3');
-
-    const afterV3 = clearVivaFlags(concurrent, 'v3');
-    expect(nextBrokerFromAgency(afterV3, 'Viva Imóveis', new Set())?.id).toBe('v1');
+    const state = flagged(allBrokers, ['v1', 'v2']);
+    expect(nextBrokerFromAgency(state, 'Viva Imóveis', new Set())?.id).toBe('v3');
+    expect(nextBrokerFromAgency(served(state, ['v3']), 'Viva Imóveis', new Set())?.id).toBe('v1');
+    expect(nextBrokerFromAgency(served(state, ['v1', 'v3']), 'Viva Imóveis', new Set())?.id).toBe('v4');
   });
 });
 

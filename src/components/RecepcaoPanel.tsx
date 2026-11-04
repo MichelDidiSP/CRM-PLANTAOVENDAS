@@ -15,6 +15,7 @@ import {
   nextBrokerForGeneralQueue,
   resolveIndicacaoBroker,
   markBrokerInService,
+  markStandardBrokerInService,
   resolveApenasImobiliariaBroker,
   dispatchBroker,
   isArrivalOrderDispatchActive,
@@ -267,6 +268,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
 
     let assignedBrokerId: string | null = null;
     let isProtectedPosition = false;
+    let isStandardAssignment = false;
     const busyIds = new Set<string>(
       brokers.filter((b) => b.attendance_status === 'em_mesa' || b.attendance_status === 'decorado' || b.attendance_status === 'em_atendimento').map((b) => b.id),
     );
@@ -300,6 +302,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
         assignedBrokerId = broker?.id ?? null;
       }
     } else if (!isParceriaQuick) {
+      isStandardAssignment = true;
       if (isArrivalOrderDispatchActive(simSeconds, isExtendedShift)) {
         const broker = nextBrokerByArrivalAnyAgency(brokers, busyIds);
         assignedBrokerId = broker?.id ?? null;
@@ -324,7 +327,8 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
     await supabase.from('queue_entries').insert(insertData);
 
     if (assignedBrokerId) {
-      await markBrokerInService(brokers, assignedBrokerId, simTimestamp);
+      const markServed = isStandardAssignment ? markStandardBrokerInService : markBrokerInService;
+      await markServed(assignedBrokerId, simTimestamp);
       await supabase.from('visits').update({ status: 'aguardando_chamada' }).eq('id', visitData.id);
     }
 

@@ -1,6 +1,6 @@
 import { Bell, CircleCheck as CheckCircle2, Eye, ArrowLeftRight, Clock, TriangleAlert as AlertTriangle, UserCheck, History, Chrome as Home, Repeat, Sun, Moon } from 'lucide-react';
 import { supabase, type Broker, type QueueEntry, type Agency } from '@/lib/supabase';
-import { isLateForSort, interleaveQueue, reverseInterleaveQueue, nextBrokerFromInverseQueue, nextBrokerForGeneralQueue, nextBrokerByArrival, nextBrokerFromInverseTop, moveBrokerToEndOfDirectQueue, moveBrokerToEndOfInverseQueue, dispatchBroker, isArrivalOrderMode, nextBrokerByArrivalAnyAgency, nextBrokerByArrivalInverse, resolveIndicacaoBroker, ATENDIMENTO_MANHA_START, markBrokerInService } from '@/lib/queueEngine';
+import { isLateForSort, interleaveQueue, reverseInterleaveQueue, nextBrokerFromInverseQueue, nextBrokerForGeneralQueue, nextBrokerByArrival, nextBrokerFromInverseTop, moveBrokerToEndOfDirectQueue, moveBrokerToEndOfInverseQueue, dispatchBroker, isArrivalOrderMode, nextBrokerByArrivalAnyAgency, nextBrokerByArrivalInverse, resolveIndicacaoBroker, ATENDIMENTO_MANHA_START, markBrokerInService, markStandardBrokerInService } from '@/lib/queueEngine';
 import { useSim } from '@/lib/simContext';
 
 type Props = {
@@ -34,7 +34,7 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
       .filter((id): id is string => id != null),
   );
 
-  async function updateEntryToCalling(entry: QueueEntry, brokerId: string | null) {
+  async function updateEntryToCalling(entry: QueueEntry, brokerId: string | null, isStandard = false) {
     const attempts = entry.attempts + 1;
     await supabase
       .from('queue_entries')
@@ -44,7 +44,8 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
       await supabase.from('visits').update({ status: 'aguardando_chamada' }).eq('id', entry.visit_id);
     }
     if (brokerId) {
-      await markBrokerInService(brokers, brokerId, new Date().toISOString());
+      const markServed = isStandard ? markStandardBrokerInService : markBrokerInService;
+      await markServed(brokerId, new Date().toISOString());
     }
   }
 
@@ -58,7 +59,7 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
     const referredBrokerId = entry.visit?.referred_broker_id ?? null;
     const lastCalledAgency = await getLastCalledAgency();
     const { broker } = dispatchBroker(brokers, entry.queue_type, simSeconds, busyBrokerIds, lastCalledAgency, referredBrokerId);
-    await updateEntryToCalling(entry, broker?.id ?? null);
+    await updateEntryToCalling(entry, broker?.id ?? null, referredBrokerId === null && entry.queue_type === 'geral');
     if (broker && entry.queue_type === 'geral') {
       await updateLastCalledAgency(broker.agency);
     }

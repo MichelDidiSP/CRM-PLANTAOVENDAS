@@ -158,6 +158,21 @@ export function setCompanyDrawOrder(order: Agency[]): void {
 export function resetCompanyRotation(): void {
   setCompanyRotationIndex(0);
   try { localStorage.removeItem(DRAW_ORDER_KEY); } catch { /* ignore */ }
+  try { localStorage.removeItem(COMPANY_CURSOR_KEY); } catch { /* ignore */ }
+}
+
+type CompanyCursor = { order: number | null; owedId: string | null };
+const COMPANY_CURSOR_KEY = 'plantao_company_queue_cursor';
+
+function getCompanyCursors(): Partial<Record<Agency, CompanyCursor>> {
+  try {
+    const stored = localStorage.getItem(COMPANY_CURSOR_KEY);
+    return stored ? JSON.parse(stored) : {};
+  } catch { return {}; }
+}
+
+function setCompanyCursor(agency: Agency, cursor: CompanyCursor): void {
+  try { localStorage.setItem(COMPANY_CURSOR_KEY, JSON.stringify({ ...getCompanyCursors(), [agency]: cursor })); } catch { /* ignore */ }
 }
 
 export const QUICK_REASONS: VisitReason[] = ['Primeira visita', 'Retorno', 'Indicação', 'Parceria', 'Visita ao Decorado', 'Indicação Presente', 'Indicação Ausente', 'Indicação Imobiliária'];
@@ -507,16 +522,33 @@ function eligibleBrokersFromAgency(brokers: Broker[], agency: Agency, excludeIds
 }
 
 /**
- * A broker returning from Pausa on their turn yields once to the next free colleague;
- * their flag is cleared when that colleague is served, so they take the client after it.
+ * Standard (Primeira Visita) pick for one company. Walks line order forward from the
+ * company cursor and wraps around, so a bypassed busy broker keeps their place for the next round.
  */
 export function nextBrokerFromAgency(brokers: Broker[], agency: Agency, excludeIds: Set<string>): Broker | undefined {
-  const [head, ...rest] = eligibleBrokersFromAgency(brokers, agency, excludeIds);
-  if (head?.returning_from_pause) {
+  const eligible = eligibleBrokersFromAgency(brokers, agency, excludeIds);
+  const cursor = getCompanyCursors()[agency] ?? { order: null, owedId: null };
+  const start = cursor.order;
+  const ordered = start === null
+    ? eligible
+    : [...eligible.filter((b) => orderOf(b) > start), ...eligible.filter((b) => orderOf(b) <= start)];
+  const [first, ...rest] = ordered;
+  if (!first) return undefined;
+
+  if (first.returning_from_pause && cursor.owedId !== first.id) {
     const colleague = rest.find((b) => !b.returning_from_pause);
-    if (colleague) return colleague;
+    if (colleague) {
+      setCompanyCursor(agency, { order: orderOf(first) - 0.5, owedId: first.id });
+      return colleague;
+    }
   }
-  return head;
+
+  setCompanyCursor(agency, { order: orderOf(first), owedId: null });
+  return first;
+}
+
+function orderOf(b: Broker): number {
+  return b.sorteio_order ?? 999_999;
 }
 
 /**
@@ -667,11 +699,12 @@ export async function markReturningFromPause(brokerId: string, brokers: Broker[]
   await supabase.from('brokers').update({ returning_from_pause: turnPassedOrNow }).eq('id', brokerId);
 }
 
-export async function markBrokerInService(brokers: Broker[], brokerId: string, timestamp: string): Promise<void> {
+export async function markBrokerInService(brokerId: string, timestamp: string): Promise<void> {
   await supabase.from('brokers').update({ attendance_status: 'em_mesa', last_status_update: timestamp }).eq('id', brokerId);
-  const broker = brokers.find((b) => b.id === brokerId);
-  if (!broker) return;
-  await supabase.from('brokers').update({ returning_from_pause: false }).eq('agency', broker.agency).eq('returning_from_pause', true);
+}
+
+export async function markStandardBrokerInService(brokerId: string, timestamp: string): Promise<void> {
+  await supabase.from('brokers').update({ attendance_status: 'em_mesa', last_status_update: timestamp, returning_from_pause: false }).eq('id', brokerId);
 }
 
 export function resolveIndicacaoBroker(

@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { Volume2, VolumeX, Timer, Users, Building2, Zap, Chrome as Home, ArrowLeftRight, TriangleAlert as AlertTriangle, History } from 'lucide-react';
 import { supabase, type Broker, type QueueEntry, type Agency } from '@/lib/supabase';
-import { formatTime, nextBrokerFromInverseTop, nextBrokerFromAgency, nextBrokerByArrival, markBrokerInService } from '@/lib/queueEngine';
+import { formatTime, nextBrokerFromInverseTop, nextBrokerFromAgency, nextBrokerByArrival, markBrokerInService, markStandardBrokerInService } from '@/lib/queueEngine';
 import { useSim } from '@/lib/simContext';
 
 type Props = {
@@ -145,7 +145,8 @@ export default function ChamadasPanel({ queue, brokers }: Props) {
       }
 
       if (nextBrokerId) {
-        await markBrokerInService(brokers, nextBrokerId, new Date().toISOString());
+        const markServed = entry.queue_type === 'geral' ? markStandardBrokerInService : markBrokerInService;
+        await markServed(nextBrokerId, new Date().toISOString());
       }
     }, 1500);
   }, [currentCall, brokers, queue]);
