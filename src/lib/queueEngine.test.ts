@@ -227,6 +227,12 @@ describe('Vez Geral stays inside the selected company', () => {
     expect(result.agency).toBe('Viva Imóveis');
   });
 
+  it('each company keeps its own pointer', () => {
+    expect(nextBrokerFromAgency(allBrokers, 'Casa Nobre', new Set())?.agency).toBe('Casa Nobre');
+    nextBrokerFromAgency(allBrokers, 'Casa Nobre', new Set());
+    expect(nextBrokerFromAgency(allBrokers, 'Viva Imóveis', new Set())?.id).toBe('v1');
+  });
+
   it('pointer does not advance when the target company has no free broker', () => {
     const vivaBusy = allBrokers.map((b) => (b.agency === 'Viva Imóveis' ? { ...b, attendance_status: 'em_mesa' as const } : b));
     expect(nextBrokerForGeneralQueue(vivaBusy, null, new Set()).broker?.agency).toBe('Casa Nobre');

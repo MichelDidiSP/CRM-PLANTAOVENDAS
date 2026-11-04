@@ -158,21 +158,21 @@ export function setCompanyDrawOrder(order: Agency[]): void {
 export function resetCompanyRotation(): void {
   setCompanyRotationIndex(0);
   try { localStorage.removeItem(DRAW_ORDER_KEY); } catch { /* ignore */ }
-  try { localStorage.removeItem(COMPANY_CURSOR_KEY); } catch { /* ignore */ }
+  try { localStorage.removeItem(COMPANY_POINTERS_KEY); } catch { /* ignore */ }
 }
 
-type CompanyCursor = { order: number | null; owedId: string | null };
-const COMPANY_CURSOR_KEY = 'plantao_company_queue_cursor';
+type CompanyPointer = { index: number; owedId: string | null };
+const COMPANY_POINTERS_KEY = 'plantao_company_pointers';
 
-function getCompanyCursors(): Partial<Record<Agency, CompanyCursor>> {
+function getCompanyPointers(): Partial<Record<Agency, CompanyPointer>> {
   try {
-    const stored = localStorage.getItem(COMPANY_CURSOR_KEY);
+    const stored = localStorage.getItem(COMPANY_POINTERS_KEY);
     return stored ? JSON.parse(stored) : {};
   } catch { return {}; }
 }
 
-function setCompanyCursor(agency: Agency, cursor: CompanyCursor): void {
-  try { localStorage.setItem(COMPANY_CURSOR_KEY, JSON.stringify({ ...getCompanyCursors(), [agency]: cursor })); } catch { /* ignore */ }
+function setCompanyPointer(agency: Agency, pointer: CompanyPointer): void {
+  try { localStorage.setItem(COMPANY_POINTERS_KEY, JSON.stringify({ ...getCompanyPointers(), [agency]: pointer })); } catch { /* ignore */ }
 }
 
 export const QUICK_REASONS: VisitReason[] = ['Primeira visita', 'Retorno', 'Indicação', 'Parceria', 'Visita ao Decorado', 'Indicação Presente', 'Indicação Ausente', 'Indicação Imobiliária'];
@@ -522,30 +522,35 @@ function eligibleBrokersFromAgency(brokers: Broker[], agency: Agency, excludeIds
 }
 
 /**
- * Standard (Primeira Visita) pick for one company. Walks line order forward from the
- * company cursor and wraps around, so a bypassed busy broker keeps their place for the next round.
+ * Standard (Primeira Visita) pick for one company. Walks that company's line from its own
+ * pointer, wrapping by the company's broker count, so a bypassed busy broker keeps their place.
  */
 export function nextBrokerFromAgency(brokers: Broker[], agency: Agency, excludeIds: Set<string>): Broker | undefined {
-  const eligible = eligibleBrokersFromAgency(brokers, agency, excludeIds);
-  const cursor = getCompanyCursors()[agency] ?? { order: null, owedId: null };
-  const start = cursor.order;
-  const ordered = start === null
-    ? eligible
-    : [...eligible.filter((b) => orderOf(b) > start), ...eligible.filter((b) => orderOf(b) <= start)];
+  const line = brokers
+    .filter((b) => !b.is_external_partner && b.agency === agency)
+    .sort((a, b) => orderOf(a) - orderOf(b));
+  const total = line.length;
+  if (total === 0) return undefined;
+
+  const pointer = getCompanyPointers()[agency] ?? { index: 0, owedId: null };
+  const start = pointer.index % total;
+  const eligibleIds = new Set(eligibleBrokersFromAgency(brokers, agency, excludeIds).map((b) => b.id));
+  const ordered = Array.from({ length: total }, (_, k) => line[(start + k) % total]).filter((b) => eligibleIds.has(b.id));
   const [first, ...rest] = ordered;
   if (!first) return undefined;
 
-  if (first.returning_from_pause && cursor.owedId !== first.id) {
+  if (first.returning_from_pause && pointer.owedId !== first.id) {
     const colleague = rest.find((b) => !b.returning_from_pause);
     if (colleague) {
-      setCompanyCursor(agency, { order: orderOf(first) - 0.5, owedId: first.id });
+      setCompanyPointer(agency, { index: line.indexOf(first), owedId: first.id });
       return colleague;
     }
   }
 
-  setCompanyCursor(agency, { order: orderOf(first), owedId: null });
+  setCompanyPointer(agency, { index: (line.indexOf(first) + 1) % total, owedId: null });
   return first;
 }
+
 
 function orderOf(b: Broker): number {
   return b.sorteio_order ?? 999_999;
