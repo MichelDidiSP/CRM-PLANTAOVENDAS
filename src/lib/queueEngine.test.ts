@@ -218,6 +218,22 @@ describe('Pre-Sorteio Arrival Order (Rule 1 — before 08:46h)', () => {
   });
 });
 
+describe('Vez Geral stays inside the selected company', () => {
+  it('busy first broker advances within the same company, ignoring team', () => {
+    const splitTeams = allBrokers.map((b) => (b.id === 'v2' ? { ...b, equipe: 'Equipe Outra' } : b));
+    const v1Busy = splitTeams.map((b) => (b.id === 'v1' ? { ...b, attendance_status: 'em_mesa' as const } : b));
+    const result = nextBrokerForGeneralQueue(v1Busy, null, new Set());
+    expect(result.broker?.id).toBe('v2');
+    expect(result.agency).toBe('Viva Imóveis');
+  });
+
+  it('pointer does not advance when the target company has no free broker', () => {
+    const vivaBusy = allBrokers.map((b) => (b.agency === 'Viva Imóveis' ? { ...b, attendance_status: 'em_mesa' as const } : b));
+    expect(nextBrokerForGeneralQueue(vivaBusy, null, new Set()).broker?.agency).toBe('Casa Nobre');
+    expect(nextBrokerForGeneralQueue(allBrokers, null, new Set()).broker?.id).toBe('v1');
+  });
+});
+
 describe('Company cursor and pause return (Primeira Visita)', () => {
   const served = (brokers: Broker[], ids: string[]) =>
     brokers.map((b) => (ids.includes(b.id) ? { ...b, attendance_status: 'em_mesa' as const } : b));
