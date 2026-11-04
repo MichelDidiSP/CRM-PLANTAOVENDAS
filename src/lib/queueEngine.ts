@@ -155,10 +155,14 @@ export function setCompanyDrawOrder(order: Agency[]): void {
   try { localStorage.setItem(DRAW_ORDER_KEY, JSON.stringify(order)); } catch { /* ignore */ }
 }
 
+export function resetCompanyPointers(): void {
+  try { localStorage.removeItem(COMPANY_POINTERS_KEY); } catch { /* ignore */ }
+}
+
 export function resetCompanyRotation(): void {
   setCompanyRotationIndex(0);
   try { localStorage.removeItem(DRAW_ORDER_KEY); } catch { /* ignore */ }
-  try { localStorage.removeItem(COMPANY_POINTERS_KEY); } catch { /* ignore */ }
+  resetCompanyPointers();
 }
 
 type CompanyPointer = { index: number; owedId: string | null };
@@ -315,6 +319,7 @@ export async function executeSorteio(brokers: Broker[], simSeconds: number, shif
 
   const drawOrder: Agency[] = [desempateWinner, desempateWinner === 'Viva Imóveis' ? 'Casa Nobre' : 'Viva Imóveis'];
   setCompanyDrawOrder(drawOrder);
+  resetCompanyPointers();
   setCompanyRotationIndex(0);
 
   // Persist afternoon localStorage arrays when this is the afternoon draw
