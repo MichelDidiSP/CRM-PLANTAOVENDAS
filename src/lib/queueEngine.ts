@@ -530,30 +530,36 @@ function eligibleBrokersFromAgency(brokers: Broker[], agency: Agency, excludeIds
  * Standard (Primeira Visita) pick for one company. Walks that company's line from its own
  * pointer, wrapping by the company's broker count, so a bypassed busy broker keeps their place.
  */
+export function distributePrimeiraVisita(
+  line: Broker[],
+  pointer: CompanyPointer,
+  freeIds: Set<string>,
+): { broker: Broker | undefined; next: CompanyPointer } {
+  const total = line.length;
+  if (total === 0) return { broker: undefined, next: pointer };
+
+  const start = pointer.index % total;
+  const ordered = Array.from({ length: total }, (_, k) => line[(start + k) % total]).filter((b) => freeIds.has(b.id));
+  const [first, ...rest] = ordered;
+  if (!first) return { broker: undefined, next: pointer };
+
+  const firstIndex = line.indexOf(first);
+  if (first.returning_from_pause && pointer.owedId !== first.id) {
+    const colleague = rest.find((b) => !b.returning_from_pause);
+    if (colleague) return { broker: colleague, next: { index: firstIndex, owedId: first.id } };
+  }
+
+  return { broker: first, next: { index: (firstIndex + 1) % total, owedId: null } };
+}
+
 export function nextBrokerFromAgency(brokers: Broker[], agency: Agency, excludeIds: Set<string>): Broker | undefined {
   const line = brokers
     .filter((b) => !b.is_external_partner && b.agency === agency)
     .sort((a, b) => orderOf(a) - orderOf(b));
-  const total = line.length;
-  if (total === 0) return undefined;
-
-  const pointer = getCompanyPointers()[agency] ?? { index: 0, owedId: null };
-  const start = pointer.index % total;
-  const eligibleIds = new Set(eligibleBrokersFromAgency(brokers, agency, excludeIds).map((b) => b.id));
-  const ordered = Array.from({ length: total }, (_, k) => line[(start + k) % total]).filter((b) => eligibleIds.has(b.id));
-  const [first, ...rest] = ordered;
-  if (!first) return undefined;
-
-  if (first.returning_from_pause && pointer.owedId !== first.id) {
-    const colleague = rest.find((b) => !b.returning_from_pause);
-    if (colleague) {
-      setCompanyPointer(agency, { index: line.indexOf(first), owedId: first.id });
-      return colleague;
-    }
-  }
-
-  setCompanyPointer(agency, { index: (line.indexOf(first) + 1) % total, owedId: null });
-  return first;
+  const freeIds = new Set(eligibleBrokersFromAgency(brokers, agency, excludeIds).map((b) => b.id));
+  const result = distributePrimeiraVisita(line, getCompanyPointers()[agency] ?? { index: 0, owedId: null }, freeIds);
+  if (result.broker) setCompanyPointer(agency, result.next);
+  return result.broker;
 }
 
 
