@@ -13,7 +13,7 @@ import {
   nextBrokerByArrivalAnyAgency,
   nextBrokerByArrivalInverse,
   nextBrokerForGeneralQueue,
-  resolveIndicacaoBroker,
+  distributeIndicacao,
   markBrokerInService,
   markStandardBrokerInService,
   resolveApenasImobiliariaBroker,
@@ -280,13 +280,13 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
         isProtectedPosition = true;
       } else {
         // Broker is busy → hierarchical team overflow
-        const result = resolveIndicacaoBroker(brokers, quickBrokerId || null, busyIds);
+        const result = distributeIndicacao(brokers, quickBrokerId || null, busyIds);
         assignedBrokerId = result.broker?.id ?? null;
         isProtectedPosition = result.protectedPosition;
       }
     } else if (isIndicacaoAusente) {
       // Referred broker is absent → hierarchical team overflow
-      const result = resolveIndicacaoBroker(brokers, quickBrokerId || null, busyIds);
+      const result = distributeIndicacao(brokers, quickBrokerId || null, busyIds);
       assignedBrokerId = result.broker?.id ?? null;
       isProtectedPosition = result.protectedPosition;
     } else if (isIndicacaoImobiliaria) {

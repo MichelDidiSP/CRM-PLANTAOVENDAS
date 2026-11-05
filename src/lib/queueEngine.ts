@@ -723,7 +723,7 @@ export async function markStandardBrokerInService(brokerId: string, timestamp: s
   await supabase.from('brokers').update({ attendance_status: 'em_mesa', last_status_update: timestamp, returning_from_pause: false }).eq('id', brokerId);
 }
 
-export function resolveIndicacaoBroker(
+export function distributeIndicacao(
   brokers: Broker[],
   referredBrokerId: string | null,
   excludeIds: Set<string>,
@@ -797,7 +797,7 @@ export function dispatchBroker(
   const isPreSorteio = isArrivalOrderDispatchActive(simSeconds);
 
   if (referredBrokerId) {
-    const result = resolveIndicacaoBroker(brokers, referredBrokerId, excludeIds);
+    const result = distributeIndicacao(brokers, referredBrokerId, excludeIds);
     return {
       broker: result.broker,
       agency: result.broker?.agency ?? 'Viva Imóveis',

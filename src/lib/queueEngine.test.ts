@@ -10,7 +10,7 @@ import {
   nextBrokerFromInverseTop,
   lastBrokerFromAgency,
   nextBrokerForGeneralQueue,
-  resolveIndicacaoBroker,
+  distributeIndicacao,
   dispatchBroker,
   interleaveQueue,
   resetCompanyRotation,
@@ -328,7 +328,7 @@ describe('Pós-Sorteio: Three Isolated Queues (Rule 3)', () => {
 
 describe('Hierarchical Transbordo for Indicação (Rule 2)', () => {
   it('Step 1: named broker is present and free → goes to them, no vez consumed, position protected', () => {
-    const result = resolveIndicacaoBroker(allBrokers, 'v1', new Set());
+    const result = distributeIndicacao(allBrokers, 'v1', new Set());
     expect(result.broker?.id).toBe('v1');
     expect(result.consumesVez).toBe(false);
     expect(result.source).toBe('named');
@@ -339,7 +339,7 @@ describe('Hierarchical Transbordo for Indicação (Rule 2)', () => {
     const absentBrokers = allBrokers.map((b) =>
       b.id === 'v1' ? { ...b, presence_status: 'ausente' as const } : b,
     );
-    const result = resolveIndicacaoBroker(absentBrokers, 'v1', new Set());
+    const result = distributeIndicacao(absentBrokers, 'v1', new Set());
     // Same team = same equipe. All Viva brokers share 'Equipe Teste' → last available of same team
     expect(result.broker).toBeDefined();
     expect(result.consumesVez).toBe(false);
@@ -356,7 +356,7 @@ describe('Hierarchical Transbordo for Indicação (Rule 2)', () => {
     const absentBrokers = uniqueTeamBrokers.map((b) =>
       b.id === 'v1' ? { ...b, presence_status: 'ausente' as const } : b,
     );
-    const result = resolveIndicacaoBroker(absentBrokers, 'v1', new Set());
+    const result = distributeIndicacao(absentBrokers, 'v1', new Set());
     expect(result.broker?.agency).toBe('Viva Imóveis');
     expect(result.consumesVez).toBe(false);
     expect(result.source).toBe('same_agency');
@@ -367,7 +367,7 @@ describe('Hierarchical Transbordo for Indicação (Rule 2)', () => {
     const allVivaAbsent = allBrokers.map((b) =>
       b.agency === 'Viva Imóveis' ? { ...b, presence_status: 'ausente' as const } : b,
     );
-    const result = resolveIndicacaoBroker(allVivaAbsent, 'v1', new Set());
+    const result = distributeIndicacao(allVivaAbsent, 'v1', new Set());
     expect(result.broker?.agency).toBe('Casa Nobre');
     expect(result.consumesVez).toBe(false);
     expect(result.source).toBe('other_agency');
@@ -381,7 +381,7 @@ describe('Hierarchical Transbordo for Indicação (Rule 2)', () => {
     const allNobreBusy = allVivaAbsent.map((b) =>
       b.agency === 'Casa Nobre' ? { ...b, attendance_status: 'em_mesa' as const } : b,
     );
-    const result = resolveIndicacaoBroker(allNobreBusy, 'v1', new Set());
+    const result = distributeIndicacao(allNobreBusy, 'v1', new Set());
     expect(result.source).toBe('last_of_agency');
     expect(result.broker).toBeUndefined();
     expect(result.protectedPosition).toBe(true);
