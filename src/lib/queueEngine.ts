@@ -1,3 +1,4 @@
+import { firstFree, reverseCoverage, meritCandidates, completionPatch } from './queue/coreDistribution';
 import { supabase, dbReady, type Broker, type QueueEntry, type Visit, type VisitReason, type Agency, type QueueType, type PlantaoSession, type Shift } from './supabase';
 
 const LATE_LIMIT_MANHA = 8 * 3600 + 45 * 60 + 59; // 08:45:59
@@ -167,17 +168,6 @@ export function resetCompanyRotation(): void {
 
 type CompanyPointer = { index: number; owedId: string | null };
 const COMPANY_POINTERS_KEY = 'plantao_company_pointers';
-
-function getCompanyPointers(): Partial<Record<Agency, CompanyPointer>> {
-  try {
-    const stored = localStorage.getItem(COMPANY_POINTERS_KEY);
-    return stored ? JSON.parse(stored) : {};
-  } catch { return {}; }
-}
-
-function setCompanyPointer(agency: Agency, pointer: CompanyPointer): void {
-  try { localStorage.setItem(COMPANY_POINTERS_KEY, JSON.stringify({ ...getCompanyPointers(), [agency]: pointer })); } catch { /* ignore */ }
-}
 
 export const QUICK_REASONS: VisitReason[] = ['Primeira visita', 'Retorno', 'Indicação', 'Parceria', 'Visita ao Decorado', 'Indicação Presente', 'Indicação Ausente', 'Indicação Imobiliária'];
 export const QUEUE_TYPES: QueueType[] = ['geral', 'decorado', 'parceria'];
@@ -535,21 +525,7 @@ export function distributePrimeiraVisita(
   pointer: CompanyPointer,
   freeIds: Set<string>,
 ): { broker: Broker | undefined; next: CompanyPointer } {
-  const total = line.length;
-  if (total === 0) return { broker: undefined, next: pointer };
-
-  const start = pointer.index % total;
-  const ordered = Array.from({ length: total }, (_, k) => line[(start + k) % total]).filter((b) => freeIds.has(b.id));
-  const [first, ...rest] = ordered;
-  if (!first) return { broker: undefined, next: pointer };
-
-  const firstIndex = line.indexOf(first);
-  if (first.returning_from_pause && pointer.owedId !== first.id) {
-    const colleague = rest.find((b) => !b.returning_from_pause);
-    if (colleague) return { broker: colleague, next: { index: firstIndex, owedId: first.id } };
-  }
-
-  return { broker: first, next: { index: (firstIndex + 1) % total, owedId: null } };
+  return { broker: firstFree(line, freeIds), next: { index: 0, owedId: null } };
 }
 
 export function nextBrokerFromAgency(brokers: Broker[], agency: Agency, excludeIds: Set<string>): Broker | undefined {
@@ -557,8 +533,7 @@ export function nextBrokerFromAgency(brokers: Broker[], agency: Agency, excludeI
     .filter((b) => !b.is_external_partner && b.agency === agency)
     .sort((a, b) => orderOf(a) - orderOf(b));
   const freeIds = new Set(eligibleBrokersFromAgency(brokers, agency, excludeIds).map((b) => b.id));
-  const result = distributePrimeiraVisita(line, getCompanyPointers()[agency] ?? { index: 0, owedId: null }, freeIds);
-  if (result.broker) setCompanyPointer(agency, result.next);
+  const result = distributePrimeiraVisita(line, { index: 0, owedId: null }, freeIds);
   return result.broker;
 }
 
@@ -742,28 +717,8 @@ export function distributeIndicacao(
     return { broker: referred, consumesVez: false, source: 'named', equipe: referred.equipe, protectedPosition: true };
   }
 
-  // Step 2: named broker is busy or absent → LAST available from SAME COMPANY and SAME TEAM (company has priority)
-  const sameTeam = lastBrokerFromTeam(brokers.filter((b) => b.agency === referred.agency), referred.equipe, excludeIds);
-  if (sameTeam) {
-    return { broker: sameTeam, consumesVez: false, source: 'same_team', equipe: referred.equipe, protectedPosition: true };
-  }
-
-  // Step 3: no one from same team available → LAST available from SAME COMPANY (present at project)
-  const sameAgency = lastBrokerFromAgency(brokers, referred.agency, excludeIds);
-  if (sameAgency) {
-    return { broker: sameAgency, consumesVez: false, source: 'same_agency', equipe: sameAgency.equipe, protectedPosition: true };
-  }
-
-  // Step 4: no one from same company → other company
-  const otherAgency: Agency = referred.agency === 'Viva Imóveis' ? 'Casa Nobre' : 'Viva Imóveis';
-  const otherAgencyBroker = lastBrokerFromAgency(brokers, otherAgency, excludeIds);
-  if (otherAgencyBroker) {
-    return { broker: otherAgencyBroker, consumesVez: false, source: 'other_agency', equipe: otherAgencyBroker.equipe, protectedPosition: true };
-  }
-
-  // Step 5: all exhausted → last of referred agency (may be undefined if all absent)
-  const lastBroker = lastBrokerFromAgency(brokers, referred.agency, excludeIds);
-  return { broker: lastBroker, consumesVez: false, source: 'last_of_agency', equipe: referred.equipe, protectedPosition: true };
+  const broker = reverseCoverage(brokers, referred, excludeIds);
+  return { broker, consumesVez: false, source: broker?.equipe === referred.equipe ? 'same_team' : 'same_agency', equipe: broker?.equipe ?? referred.equipe, protectedPosition: true };
 }
 
 /**
@@ -998,4 +953,34 @@ export async function fetchAll() {
     activeSession: (sessionsRes.data?.[0] ?? null) as PlantaoSession | null,
     error: brokersRes.error || visitsRes.error || queueRes.error || sessionsRes.error,
   };
+}
+
+export async function markMeritReturns(brokers: Broker[], selected: Broker, entries: QueueEntry[]) {
+  const ids = meritCandidates(brokers, selected, entries).map(b => b.id);
+  if (!ids.length) return;
+  const { error } = await supabase.from('brokers').update({ merit_priority_return: true }).in('id', ids);
+  if (error) throw error;
+}
+
+export async function concludeAttendance(entry: QueueEntry, clickedAt: string) {
+  await dbReady;
+  if (typeof supabase.rpc === 'function') {
+    const { error } = await supabase.rpc('conclude_queue_attendance', { entry_id: entry.id, clicked_at: clickedAt });
+    if (error) throw error;
+    return;
+  }
+
+  if (entry.broker_id) {
+    const { data: broker, error } = await supabase.from('brokers').select('*').eq('id', entry.broker_id).single();
+    if (error) throw error;
+    if (!broker) throw new Error('Corretor não encontrado');
+    const result = await supabase.from('brokers').update(completionPatch(broker, entry, clickedAt)).eq('id', broker.id);
+    if (result.error) throw result.error;
+  }
+  if (entry.visit_id) {
+    const { error } = await supabase.from('visits').update({ status: 'encerrado' }).eq('id', entry.visit_id);
+    if (error) throw error;
+  }
+  const { error } = await supabase.from('queue_entries').update({ queue_status: 'concluido', updated_at: clickedAt }).eq('id', entry.id);
+  if (error) throw error;
 }

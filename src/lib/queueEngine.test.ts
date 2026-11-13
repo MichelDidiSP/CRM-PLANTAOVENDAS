@@ -240,39 +240,11 @@ describe('Vez Geral stays inside the selected company', () => {
   });
 });
 
-describe('Company cursor and pause return (Primeira Visita)', () => {
-  const served = (brokers: Broker[], ids: string[]) =>
-    brokers.map((b) => (ids.includes(b.id) ? { ...b, attendance_status: 'em_mesa' as const } : b));
-  const flagged = (brokers: Broker[], ids: string[]) =>
-    brokers.map((b) => (ids.includes(b.id) ? { ...b, returning_from_pause: true } : b));
-
-  it('busy scheduled broker is bypassed to the next free colleague in line order', () => {
+describe('Dynamic company queue', () => {
+  it('always selects the first free broker without advancing a cursor', () => {
     expect(nextBrokerFromAgency(allBrokers, 'Viva Imóveis', new Set())?.id).toBe('v1');
-    expect(nextBrokerFromAgency(served(allBrokers, ['v2']), 'Viva Imóveis', new Set())?.id).toBe('v3');
-  });
-
-  it('pointer moves past the bypass, so the bypassed broker returns on the next round', () => {
-    nextBrokerFromAgency(allBrokers, 'Viva Imóveis', new Set());
-    nextBrokerFromAgency(served(allBrokers, ['v2']), 'Viva Imóveis', new Set());
-    expect(nextBrokerFromAgency(allBrokers, 'Viva Imóveis', new Set())?.id).toBe('v4');
-  });
-
-  it('returning broker on turn yields once to the next free colleague, then takes the client after it', () => {
-    const state = flagged(allBrokers, ['v1']);
-    expect(nextBrokerFromAgency(state, 'Viva Imóveis', new Set())?.id).toBe('v2');
-    expect(nextBrokerFromAgency(served(state, ['v2']), 'Viva Imóveis', new Set())?.id).toBe('v1');
-  });
-
-  it('returning broker with no free colleague is served directly', () => {
-    const state = served(flagged(allBrokers, ['v1']), ['v2', 'v3', 'v4', 'v5']);
-    expect(nextBrokerFromAgency(state, 'Viva Imóveis', new Set())?.id).toBe('v1');
-  });
-
-  it('concurrent returns keep line order', () => {
-    const state = flagged(allBrokers, ['v1', 'v2']);
-    expect(nextBrokerFromAgency(state, 'Viva Imóveis', new Set())?.id).toBe('v3');
-    expect(nextBrokerFromAgency(served(state, ['v3']), 'Viva Imóveis', new Set())?.id).toBe('v1');
-    expect(nextBrokerFromAgency(served(state, ['v1', 'v3']), 'Viva Imóveis', new Set())?.id).toBe('v4');
+    expect(nextBrokerFromAgency(allBrokers, 'Viva Imóveis', new Set(['v1']))?.id).toBe('v2');
+    expect(nextBrokerFromAgency(allBrokers, 'Viva Imóveis', new Set())?.id).toBe('v1');
   });
 });
 
@@ -363,14 +335,14 @@ describe('Hierarchical Transbordo for Indicação (Rule 2)', () => {
     expect(result.protectedPosition).toBe(true);
   });
 
-  it('Step 4: no one from same company → other agency', () => {
+  it('waits when the same company has no free broker', () => {
     const allVivaAbsent = allBrokers.map((b) =>
       b.agency === 'Viva Imóveis' ? { ...b, presence_status: 'ausente' as const } : b,
     );
     const result = distributeIndicacao(allVivaAbsent, 'v1', new Set());
-    expect(result.broker?.agency).toBe('Casa Nobre');
+    expect(result.broker).toBeUndefined();
     expect(result.consumesVez).toBe(false);
-    expect(result.source).toBe('other_agency');
+    expect(result.source).toBe('same_agency');
     expect(result.protectedPosition).toBe(true);
   });
 
@@ -382,7 +354,7 @@ describe('Hierarchical Transbordo for Indicação (Rule 2)', () => {
       b.agency === 'Casa Nobre' ? { ...b, attendance_status: 'em_mesa' as const } : b,
     );
     const result = distributeIndicacao(allNobreBusy, 'v1', new Set());
-    expect(result.source).toBe('last_of_agency');
+    expect(result.source).toBe('same_agency');
     expect(result.broker).toBeUndefined();
     expect(result.protectedPosition).toBe(true);
   });
