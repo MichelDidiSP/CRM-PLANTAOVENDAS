@@ -1,3 +1,4 @@
+import { getScheduleClock, scheduleAt, preOpeningBroker, activeBrokers } from './queue/shiftSchedule';
 import { firstFree, reverseCoverage, meritCandidates, completionPatch } from './queue/coreDistribution';
 import { supabase, dbReady, type Broker, type QueueEntry, type Visit, type VisitReason, type Agency, type QueueType, type PlantaoSession, type Shift } from './supabase';
 
@@ -118,10 +119,14 @@ export function isAfternoonArrivalBlocked(simSeconds: number): boolean {
 }
 
 export function isAfternoonActive(simSeconds: number): boolean {
+  const clock = getScheduleClock();
+  if (clock) return scheduleAt({ ...clock, seconds: simSeconds }).afternoonActive;
   return simSeconds >= ATENDIMENTO_TARDE_START;
 }
 
 export function isMorningQueueActive(simSeconds: number): boolean {
+  const clock = getScheduleClock();
+  if (clock) return !scheduleAt({ ...clock, seconds: simSeconds }).afternoonActive;
   return simSeconds < ATENDIMENTO_TARDE_START;
 }
 
@@ -175,6 +180,13 @@ export const QUEUE_TYPES: QueueType[] = ['geral', 'decorado', 'parceria'];
 export type DispatchMode = 'arrival' | 'sorteio_manha' | 'pre_tarde' | 'sorteio_tarde';
 
 export function getDispatchMode(simSeconds: number): DispatchMode {
+  const clock = getScheduleClock();
+  if (clock) {
+    const state = scheduleAt({ ...clock, seconds: simSeconds });
+    if (state.preOpening) return 'arrival';
+    if (state.afternoonActive) return 'sorteio_tarde';
+    return !clock.singleShift && simSeconds >= 13 * 3600 ? 'pre_tarde' : 'sorteio_manha';
+  }
   if (simSeconds < SORTEIO_MANHA) return 'arrival';
   if (simSeconds >= SORTEIO_MANHA && simSeconds < TARDE_CHECKIN_OPEN_SECONDS) return 'sorteio_manha';
   if (simSeconds >= TARDE_CHECKIN_OPEN_SECONDS && simSeconds < TARDE_ATEND_START_SECONDS) return 'pre_tarde';
@@ -186,17 +198,12 @@ const TARDE_ATEND_START_SECONDS = 14 * 3600;          // 14:00:00
 // LATE_LIMIT_TARDE is already defined at the top of the file (13:45:59)
 
 export function isArrivalOrderMode(simSeconds: number): boolean {
-  return getDispatchMode(simSeconds) === 'arrival';
+  const clock = getScheduleClock();
+  return clock ? scheduleAt({ ...clock, seconds: simSeconds }).preOpening : getDispatchMode(simSeconds) === 'arrival';
 }
 
 export function isArrivalOrderDispatchActive(simSeconds: number, isExtendedShift = false): boolean {
-  if (simSeconds < ATENDIMENTO_MANHA_START) return true;
-  if (isExtendedShift) return false;
-  // Block afternoon arrival-order dispatch during the inscription window (13:00–13:45:59).
-  // Morning queues continue operating normally — they are unaffected.
-  if (isAfternoonInscriptionWindow(simSeconds)) return false;
-  if (simSeconds >= SORTEIO_TARDE && simSeconds < ATENDIMENTO_TARDE_START) return true;
-  return false;
+  return scheduleAt({ seconds: simSeconds, singleShift: isExtendedShift, date: '' }).preOpening;
 }
 
 export function isManhaSorteioActive(simSeconds: number): boolean {
@@ -343,6 +350,7 @@ export async function executeSorteio(brokers: Broker[], simSeconds: number, shif
 }
 
 export async function reiniciarPlantao(brokers: Broker[]): Promise<void> {
+  await supabase.from('brokers').update({ afternoon_enrolled_at: null, preserve_shift_position: false, leave_after_service: false }).neq('id', '00000000-0000-0000-0000-000000000000');
   await supabase.from('queue_entries').delete().neq('id', '00000000-0000-0000-0000-000000000000');
 
   for (const broker of brokers) {
@@ -371,6 +379,7 @@ export async function reiniciarPlantao(brokers: Broker[]): Promise<void> {
     .update({ status: 'encerrado' })
     .in('status', ['aguardando', 'aguardando_chamada', 'em_atendimento']);
 
+  await supabase.from('plantao_sessions').delete().neq('id', '');
   resetCompanyRotation();
   resetAfternoonQueues();
 }
@@ -596,6 +605,7 @@ export function nextBrokerByArrivalAnyAgency(brokers: Broker[], excludeIds: Set<
 }
 
 export function nextBrokerByArrivalInverse(brokers: Broker[], excludeIds: Set<string>): Broker | undefined {
+  if (getScheduleClock()) return nextBrokerByArrivalAnyAgency(brokers, excludeIds);
   const available = brokers
     .filter((b) => !b.is_external_partner && b.presence_status === 'presente' && b.attendance_status === 'livre' && !isApenasIndicacao(b) && !excludeIds.has(b.id))
     .sort((a, b) => {
@@ -749,6 +759,18 @@ export function dispatchBroker(
   lastCalledAgency: Agency | null,
   referredBrokerId: string | null,
 ): { broker: Broker | undefined; agency: Agency; consumesVez: boolean; protectedPosition: boolean; source: string } {
+  const clock = getScheduleClock();
+  if (clock) {
+    const state = scheduleAt({ ...clock, seconds: simSeconds });
+    const owner = brokers.find(b => b.id === referredBrokerId);
+    brokers = activeBrokers(brokers, { ...clock, seconds: simSeconds });
+    if (owner && !brokers.some(b => b.id === owner.id)) brokers = [...brokers, { ...owner, presence_status: 'ausente' }];
+    if (state.preOpening || !state.acceptingClients) {
+      const broker = state.acceptingClients ? preOpeningBroker(brokers, queueType, referredBrokerId, excludeIds) : undefined;
+      return { broker, agency: broker?.agency ?? 'Viva Imóveis', consumesVez: !referredBrokerId,
+        protectedPosition: !!referredBrokerId, source: 'pre_opening' };
+    }
+  }
   const isPreSorteio = isArrivalOrderDispatchActive(simSeconds);
 
   if (referredBrokerId) {
@@ -943,7 +965,7 @@ export async function fetchAll() {
     supabase.from('brokers').select('*').order('created_at', { ascending: true }),
     supabase.from('visits').select('*').order('created_at', { ascending: true }),
     supabase.from('queue_entries').select('*, visit:visits(*), broker:brokers(*)').order('created_at', { ascending: true }),
-    supabase.from('plantao_sessions').select('*').order('started_at', { ascending: false }).limit(1),
+    supabase.from('plantao_sessions').select('*').eq('status', 'active').order('started_at', { ascending: false }).limit(1),
   ]);
 
   return {

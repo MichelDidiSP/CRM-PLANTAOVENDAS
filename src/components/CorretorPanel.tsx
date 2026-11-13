@@ -1,3 +1,5 @@
+import { enrollAfternoon, leaveOvertime } from '@/lib/queue/shiftScheduleStore';
+import { scheduleAt, enrolledForAfternoon, type ScheduledBroker } from '@/lib/queue/shiftSchedule';
 import { useState } from 'react';
 import { UserCheck, UserX, Clock, Coffee, Table2, Chrome as Home, CircleCheck as CheckCircle, Plus, Trash2, ExternalLink, Users as Users2, Sun, Moon, Bookmark, Eye } from 'lucide-react';
 import { supabase, type Broker, type BrokerPresence, type AttendanceStatus, type Agency, type Shift } from '@/lib/supabase';
@@ -7,7 +9,9 @@ import { useSim } from '@/lib/simContext';
 type Props = { brokers: Broker[] };
 
 export default function CorretorPanel({ brokers }: Props) {
-  const { getCurrentTime, clockDisplay, currentShift, isCheckinOpen, isPreSorteio } = useSim();
+  const { getCurrentTime, clockDisplay, currentShift, isCheckinOpen, isPreSorteio, simSeconds, isExtendedShift, plantaoDate } = useSim();
+  const clock = { seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate };
+  const schedule = scheduleAt(clock);
   const [showAdd, setShowAdd] = useState(false);
   const [showAddPartner, setShowAddPartner] = useState(false);
   const [newName, setNewName] = useState('');
@@ -31,6 +35,8 @@ export default function CorretorPanel({ brokers }: Props) {
   const isBarrierActive = simSec >= barrierSec;
 
   async function updatePresence(broker: Broker, status: BrokerPresence) {
+    if (status === 'ausente' && schedule.overtime) { await leaveOvertime(broker); return; }
+    if (status === 'presente' && schedule.closed) return;
     const now = getCurrentTime().toISOString();
     const updates: Partial<Broker> & { last_status_update: string } = { presence_status: status, last_status_update: now };
     if (status === 'presente' && !broker.arrived_at) {
@@ -83,6 +89,7 @@ export default function CorretorPanel({ brokers }: Props) {
 
   return (
     <div className="space-y-6">
+      {error && <p role="alert" className="text-red-400">{error}</p>}
       <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
         <SummaryCard icon={<UserCheck className="h-5 w-5" />} label="Presentes" value={present.length} color="text-emerald-400" />
         <SummaryCard icon={<UserX className="h-5 w-5" />} label="Ausentes" value={absent.length} color="text-slate-400" />
@@ -179,6 +186,10 @@ export default function CorretorPanel({ brokers }: Props) {
                 <div className="mb-3">
                   <p className="text-xs uppercase tracking-wide text-slate-500 mb-2">Presença</p>
                   <div className="flex gap-2">
+                    {schedule.afternoonEnrollment && <button className="px-3 py-2 rounded-lg bg-indigo-700 text-sm" disabled={enrolledForAfternoon(broker as ScheduledBroker, plantaoDate)} onClick={() => enrollAfternoon(broker.id, clock).catch(e => setError(String(e)))}>
+                      {enrolledForAfternoon(broker as ScheduledBroker, plantaoDate) ? 'Inscrito na tarde' : 'Inscrever na tarde'}
+                    </button>}
+                    {schedule.overtime && <button className="px-3 py-2 rounded-lg bg-slate-700 text-sm" onClick={() => leaveOvertime(broker).catch(e => setError(String(e)))}>Encerrar expediente</button>}
                     <PresenceButton active={broker.presence_status === 'presente'} onClick={() => updatePresence(broker, 'presente')} icon={<UserCheck className="h-4 w-4" />} label="Presente" color="emerald" />
                     <PresenceButton active={broker.presence_status === 'pausa'} onClick={() => updatePresence(broker, 'pausa')} icon={<Coffee className="h-4 w-4" />} label="Pausa" color="amber" />
                     <PresenceButton active={broker.presence_status === 'ausente'} onClick={() => updatePresence(broker, 'ausente')} icon={<UserX className="h-4 w-4" />} label="Ausente" color="slate" />

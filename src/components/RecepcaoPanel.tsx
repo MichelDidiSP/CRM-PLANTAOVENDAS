@@ -1,3 +1,4 @@
+import { scheduleAt, preOpeningChoice } from '@/lib/queue/shiftSchedule';
 import { useState, useRef, useMemo } from 'react';
 import { UserPlus, Phone, TriangleAlert as AlertTriangle, CircleCheck as CheckCircle2, Clock, Search, EyeOff, Eye, Zap, UserCheck, UserX, Building2, Trash2, X } from 'lucide-react';
 import { supabase, type Broker, type Visit, type VisitReason, type Agency } from '@/lib/supabase';
@@ -40,7 +41,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
   const [submitting, setSubmitting] = useState(false);
   const [searchPhone, setSearchPhone] = useState('');
   const [revealed, setRevealed] = useState(false);
-  const { currentShift, simSeconds, getCurrentTime, isHoliday, setIsHoliday, isExtendedShift } = useSim();
+  const { currentShift, simSeconds, getCurrentTime, isHoliday, setIsHoliday, isExtendedShift, plantaoDate } = useSim();
 
   // Predictive search state
   const [brokerSearch, setBrokerSearch] = useState('');
@@ -74,7 +75,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
   const isIndicacaoAusente = quickReason === 'Indicação Ausente';
   const isIndicacaoImobiliaria = quickReason === 'Indicação Imobiliária';
   const isAnyIndicacao = isIndicacaoPresente || isIndicacaoAusente || isIndicacaoImobiliaria;
-  const needsBrokerSelect = isIndicacaoPresente || isIndicacaoAusente;
+  const needsBrokerSelect = isIndicacaoPresente || isIndicacaoAusente || quickReason === 'Retorno' || quickReason === 'Indicação';
 
   const presentBrokers = brokers.filter(
     (b) => !b.is_external_partner && b.presence_status === 'presente',
@@ -138,6 +139,19 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
     setManualBrokerEquipe('');
   }
 
+  function choosePreOpeningBroker(ownerId: string | null): string | null {
+    if (!isArrivalOrderDispatchActive(simSeconds, isExtendedShift) || !ownerId) return null;
+    const choice = preOpeningChoice(brokers, ownerId);
+    if (!choice.needsChoice) return null;
+    const wait = window.confirm('O corretor ainda não está inscrito. O cliente deseja aguardar? OK para aguardar; Cancelar para atender com o primeiro inscrito da mesma imobiliária.');
+    if (wait) return null;
+    if (!choice.alternative) {
+      setMessage({ type: 'warning', text: 'Nenhum corretor livre inscrito na mesma imobiliária. Cliente aguardará.' });
+      return null;
+    }
+    return choice.alternative.id;
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setMessage(null);
@@ -155,6 +169,8 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
       return;
     }
 
+    if (!scheduleAt({ seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate }).acceptingClients) { setMessage({ type: 'warning', text: 'Entrada de novos clientes encerrada.' }); return; }
+    const preOpeningAssignee = choosePreOpeningBroker(referredBrokerId || null);
     setSubmitting(true);
 
     const simTimestamp = getCurrentTime().toISOString();
@@ -169,6 +185,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
         phone: normalizedPhone,
         visit_reason: reason,
         referred_broker_id: referredBrokerId || null,
+        pre_opening_assignee: preOpeningAssignee,
         status: 'aguardando',
         created_at: simTimestamp,
       })
@@ -214,6 +231,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
   }
 
   async function handleQuickEntry() {
+    if (!scheduleAt({ seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate }).acceptingClients) { setMessage({ type: 'warning', text: 'Entrada de novos clientes encerrada.' }); return; }
     setQuickSubmitting(true);
     quickCounterRef.current += 1;
     try { localStorage.setItem('global_client_counter', String(quickCounterRef.current)); } catch { /* ignore */ }
@@ -246,6 +264,8 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
       targetAgency = apenasImobiliariaAgency;
     }
 
+    if (quickReason === 'Retorno' || quickReason === 'Indicação') referredBrokerId = quickBrokerId || null;
+    const preOpeningAssignee = choosePreOpeningBroker(referredBrokerId);
     const entryAgency: Agency = isParceriaQuick ? 'Externo' : targetAgency;
 
     const { data: visitData, error: visitError } = await supabase
@@ -255,6 +275,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
         phone: fakePhone,
         visit_reason: dbVisitReason,
         referred_broker_id: referredBrokerId,
+        pre_opening_assignee: preOpeningAssignee,
         status: 'aguardando',
         created_at: simTimestamp,
       })
@@ -273,44 +294,10 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
       brokers.filter((b) => b.attendance_status === 'em_mesa' || b.attendance_status === 'decorado' || b.attendance_status === 'em_atendimento').map((b) => b.id),
     );
 
-    if (isIndicacaoPresente) {
-      const referred = brokers.find((b) => b.id === quickBrokerId);
-      if (referred && referred.presence_status === 'presente' && (referred.attendance_status === 'livre' || referred.attendance_status === 'apenas_indicacao')) {
-        assignedBrokerId = referred.id;
-        isProtectedPosition = true;
-      } else {
-        // Broker is busy → hierarchical team overflow
-        const result = distributeIndicacao(brokers, quickBrokerId || null, busyIds);
-        assignedBrokerId = result.broker?.id ?? null;
-        isProtectedPosition = result.protectedPosition;
-      }
-    } else if (isIndicacaoAusente) {
-      // Referred broker is absent → hierarchical team overflow
-      const result = distributeIndicacao(brokers, quickBrokerId || null, busyIds);
-      assignedBrokerId = result.broker?.id ?? null;
-      isProtectedPosition = result.protectedPosition;
-    } else if (isIndicacaoImobiliaria) {
-      // Apenas Imobiliária → last available broker of selected company, consumes vez
-      const result = resolveApenasImobiliariaBroker(brokers, apenasImobiliariaAgency, busyIds);
-      assignedBrokerId = result.broker?.id ?? null;
-    } else if (isDecoradoQuick) {
-      if (isArrivalOrderDispatchActive(simSeconds, isExtendedShift)) {
-        const broker = nextBrokerByArrivalInverse(brokers, busyIds);
-        assignedBrokerId = broker?.id ?? null;
-      } else {
-        const broker = nextBrokerFromInverseTop(brokers, busyIds);
-        assignedBrokerId = broker?.id ?? null;
-      }
-    } else if (!isParceriaQuick) {
-      isStandardAssignment = true;
-      if (isArrivalOrderDispatchActive(simSeconds, isExtendedShift)) {
-        const broker = nextBrokerByArrivalAnyAgency(brokers, busyIds);
-        assignedBrokerId = broker?.id ?? null;
-      } else {
-        const { broker } = nextBrokerForGeneralQueue(brokers, null, busyIds);
-        assignedBrokerId = broker?.id ?? null;
-      }
-    }
+    const result = dispatchBroker(brokers, queueType, simSeconds, busyIds, null, preOpeningAssignee ?? referredBrokerId);
+    assignedBrokerId = result.broker?.id ?? null;
+    isProtectedPosition = result.protectedPosition;
+    isStandardAssignment = !referredBrokerId && queueType === 'geral';
 
     const insertData: Record<string, unknown> = {
       visit_id: visitData.id,
