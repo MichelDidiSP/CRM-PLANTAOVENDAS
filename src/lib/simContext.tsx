@@ -1,18 +1,19 @@
-import { createContext, useContext, useState, useEffect, useRef, useCallback, type ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
+import { useLayoutEffect } from 'react';
+import { scheduleAt, setScheduleClock, SHIFT_TIMES } from './queue/shiftSchedule';
 import type { Shift } from './supabase';
-import { isManhaSorteioActive as checkManhaSorteio, isAfternoonActive as checkAfternoonActive, isMorningQueueActive as checkMorningQueueActive } from './queueEngine';
 
 // Shift windows (seconds since midnight)
 const MANHA_START = 8 * 3600;          // 08:00:00 — check-in opens
 const MANHA_CHECKIN_LIMIT = 8 * 3600 + 45 * 60 + 59; // 08:45:59
 const MANHA_SORTEIO = 8 * 3600 + 46 * 60;           // 08:46:00
 const MANHA_ATEND_START = 9 * 3600;    // 09:00:00
-const MANHA_ATEND_END = 14 * 3600;     // 14:00:00 — fila da manhã extinta
+const MANHA_ATEND_END = 14 * 3600 + 1;     // 14:00:00 — fila da manhã extinta
 
 const TARDE_CHECKIN_OPEN = 13 * 3600;       // 13:00:00
 const TARDE_CHECKIN_LIMIT = 13 * 3600 + 45 * 60 + 59; // 13:45:59
 const TARDE_SORTEIO = 13 * 3600 + 46 * 60;  // 13:46:00
-const TARDE_ATEND_START = 14 * 3600;       // 14:00:00
+const TARDE_ATEND_START = 14 * 3600 + 1;       // 14:00:00
 const TARDE_ATEND_END = 19 * 3600;         // 19:00:00
 
 const DEFAULT_START_SECONDS = 8 * 3600 + 30 * 60; // 08:30:00
@@ -66,16 +67,6 @@ function parseTimeInput(input: string): number | null {
   return null;
 }
 
-function isWeekendDate(dateStr: string): boolean {
-  const day = new Date(dateStr + 'T12:00:00').getDay();
-  return day === 0 || day === 6;
-}
-
-function determineShift(seconds: number): Shift {
-  if (seconds >= TARDE_ATEND_START || seconds >= TARDE_CHECKIN_OPEN) return 'tarde';
-  return 'manha';
-}
-
 const STORAGE_KEY = 'plantao_sim_seconds';
 const TESTMODE_KEY = 'plantao_test_mode';
 const HOLIDAY_KEY = 'crm_is_holiday';
@@ -97,9 +88,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
   const [isHoliday, setIsHoliday] = useState(() => {
     try { return localStorage.getItem(HOLIDAY_KEY) === 'true'; } catch { return false; }
   });
-  const [sorteioTriggered, setSorteioTriggered] = useState(false);
   const [plantaoDate, setPlantaoDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const sorteioFiredRef = useRef(false);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -112,25 +101,18 @@ export function SimProvider({ children }: { children: ReactNode }) {
     return () => window.clearInterval(interval);
   }, []);
 
-  const isExtendedShift = isWeekendDate(plantaoDate) || isHoliday;
-  const currentShift: Shift = isExtendedShift ? 'manha' : determineShift(simSeconds);
-  const boundaries = SHIFT_BOUNDARIES[currentShift];
-  const sorteioThreshold = boundaries.sorteio;
-
-  useEffect(() => {
-    if (!sorteioFiredRef.current && simSeconds >= sorteioThreshold) {
-      sorteioFiredRef.current = true;
-      setSorteioTriggered(true);
-    }
-  }, [simSeconds, sorteioThreshold]);
+  const isExtendedShift = isHoliday;
+  const schedule = scheduleAt({ seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate });
+  useLayoutEffect(() => {
+    setScheduleClock({ seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate });
+    return () => setScheduleClock(undefined);
+  }, [simSeconds, isExtendedShift, plantaoDate]);
+  const currentShift: Shift = schedule.shift;
+  const sorteioTriggered = schedule.morningDrawDue;
 
   const setStartTime = useCallback((time: string) => {
     const parsed = parseTimeInput(time);
     if (parsed !== null) {
-      const shift = determineShift(parsed);
-      const threshold = SHIFT_BOUNDARIES[shift].sorteio;
-      sorteioFiredRef.current = parsed >= threshold;
-      setSorteioTriggered(parsed >= threshold);
       setSimSeconds(parsed);
       try { localStorage.setItem(STORAGE_KEY, String(parsed)); } catch { /* ignore */ }
     }
@@ -146,24 +128,20 @@ export function SimProvider({ children }: { children: ReactNode }) {
 
   const jumpToAfternoon = useCallback(() => {
     const afternoonStart = 13 * 3600 + 40 * 60; // 13:40:00
-    sorteioFiredRef.current = afternoonStart >= TARDE_SORTEIO;
-    setSorteioTriggered(afternoonStart >= TARDE_SORTEIO);
     setSimSeconds(afternoonStart);
     try { localStorage.setItem(STORAGE_KEY, String(afternoonStart)); } catch { /* ignore */ }
   }, []);
 
   const getCurrentTime = useCallback((): Date => {
-    const d = new Date();
+    const d = new Date(plantaoDate + 'T00:00:00');
     const h = Math.floor(simSeconds / 3600) % 24;
     const m = Math.floor(simSeconds / 60) % 60;
     const s = simSeconds % 60;
     d.setHours(h, m, s, 0);
     return d;
-  }, [simSeconds]);
+  }, [simSeconds, plantaoDate]);
 
   const resetClock = useCallback(() => {
-    sorteioFiredRef.current = false;
-    setSorteioTriggered(false);
     setSimSeconds(DEFAULT_START_SECONDS);
     try { localStorage.setItem(STORAGE_KEY, String(DEFAULT_START_SECONDS)); } catch { /* ignore */ }
   }, []);
@@ -176,29 +154,16 @@ export function SimProvider({ children }: { children: ReactNode }) {
     try { localStorage.setItem(HOLIDAY_KEY, String(isHoliday)); } catch { /* ignore */ }
   }, [isHoliday]);
 
-  // Restore sorteioTriggered state on mount based on persisted time
-  useEffect(() => {
-    const shift = determineShift(simSeconds);
-    const threshold = SHIFT_BOUNDARIES[shift].sorteio;
-    if (simSeconds >= threshold) {
-      sorteioFiredRef.current = true;
-      setSorteioTriggered(true);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   const callDuration = testMode ? 10 : 120;
   const clockDisplay = secondsToClock(simSeconds);
-  const weekday = !isWeekendDate(plantaoDate);
 
-  const isPreSorteio = simSeconds < boundaries.sorteio && simSeconds >= boundaries.checkinOpen;
-  const isCheckinOpen = simSeconds >= boundaries.checkinOpen && simSeconds <= boundaries.checkinLimit;
-  const atendEnd = isExtendedShift ? TARDE_ATEND_END : boundaries.atendEnd;
-  const isAtendimentoActive = simSeconds >= boundaries.atendStart && simSeconds < atendEnd;
-  const isShiftTransition = !isExtendedShift && simSeconds >= MANHA_ATEND_END && simSeconds < MANHA_ATEND_END + 60;
-  const manhaSorteioActive = checkManhaSorteio(simSeconds);
-  const afternoonActive = !isExtendedShift && checkAfternoonActive(simSeconds);
-  const morningQueueActive = isExtendedShift || checkMorningQueueActive(simSeconds);
+  const isPreSorteio = schedule.preOpening;
+  const isCheckinOpen = (simSeconds >= SHIFT_TIMES.open && simSeconds < SHIFT_TIMES.morningDraw) || schedule.afternoonEnrollment;
+  const isAtendimentoActive = schedule.acceptingClients;
+  const isShiftTransition = schedule.afternoonActive;
+  const manhaSorteioActive = schedule.morningDrawDue && !schedule.afternoonActive;
+  const afternoonActive = schedule.afternoonActive;
+  const morningQueueActive = !schedule.afternoonActive;
 
   return (
     <SimContext.Provider
@@ -215,7 +180,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
         sorteioTriggered,
         resetClock,
         currentShift,
-        isWeekday: weekday,
+        isWeekday: !isExtendedShift,
         plantaoDate,
         setPlantaoDate,
         isPreSorteio,

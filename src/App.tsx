@@ -1,32 +1,34 @@
+import { advanceSchedule } from '@/lib/queue/shiftScheduleStore';
+import { scheduleAt, type ShiftDraw } from '@/lib/queue/shiftSchedule';
+import PendingShiftQueues from '@/components/PendingShiftQueues';
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { Building2, DoorOpen, Tv, Users, ListOrdered, Zap, Clock, Plus, Shuffle, ClipboardList, RefreshCw, FileText, X, Trophy, Calendar, Sun, Moon, ArrowRight, Home, Database, TriangleAlert as AlertTriangle } from 'lucide-react';
 import { supabase, dbReady, type Broker, type QueueEntry, type Visit, type PlantaoSession } from '@/lib/supabase';
-import { fetchAll, interleaveQueue, executeSorteio, reiniciarPlantao, transitionToAfternoon, exportRelatorioFechamento, isLateForSort, hasAfternoonCheckIn, ATENDIMENTO_TARDE_START, type SorteioResult } from '@/lib/queueEngine';
+import { setCompanyDrawOrder, setCompanyRotationIndex, fetchAll, interleaveQueue, reiniciarPlantao, isLateForSort } from '@/lib/queueEngine';
 import { SimProvider, useSim } from '@/lib/simContext';
 
 import RecepcaoPanel from '@/components/RecepcaoPanel';
 import ChamadasPanel from '@/components/ChamadasPanel';
 import CorretorPanel from '@/components/CorretorPanel';
-import FilaPanel from '@/components/FilaPanel';
+import FilaPanel from '@/components/ScheduledFilaPanel';
 
 type View = 'recepcao' | 'chamadas' | 'corretor' | 'fila' | 'auditoria';
 
 function AppContent() {
-  const { clockDisplay, setStartTime, addMinute, jumpToAfternoon, testMode, setTestMode, sorteioTriggered, resetClock, simSeconds, currentShift, isWeekday, plantaoDate, setPlantaoDate, isPreSorteio, isCheckinOpen, isAtendimentoActive, isShiftTransition, isAfternoonActive, isMorningQueueActive } = useSim();
+  const { clockDisplay, setStartTime, addMinute, jumpToAfternoon, testMode, setTestMode, sorteioTriggered, resetClock, simSeconds, currentShift, isWeekday, plantaoDate, setPlantaoDate, isPreSorteio, isCheckinOpen, isAtendimentoActive, isShiftTransition, isAfternoonActive, isMorningQueueActive, isExtendedShift } = useSim();
+  const schedule = scheduleAt({ seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate });
+  const [pendingDraw, setPendingDraw] = useState<ShiftDraw | null>(null);
+  const scheduleRunning = useRef(false);
   const [view, setView] = useState<View>('recepcao');
   const [brokers, setBrokers] = useState<Broker[]>([]);
   const [visits, setVisits] = useState<Visit[]>([]);
   const [queue, setQueue] = useState<QueueEntry[]>([]);
   const [activeSession, setActiveSession] = useState<PlantaoSession | null>(null);
   const [loading, setLoading] = useState(true);
-  const [sorteioResult, setSorteioResult] = useState<SorteioResult | null>(null);
   const [reiniciarDialog, setReiniciarDialog] = useState(false);
   const [attendanceReport, setAttendanceReport] = useState<QueueEntry[] | null>(null);
   const [reiniciando, setReiniciando] = useState(false);
-  const [transitioning, setTransitioning] = useState(false);
   const pollRef = useRef<number | undefined>(undefined);
-  const sorteioExecutedRef = useRef(false);
-  const transitionExecutedRef = useRef(false);
 
   const [loadError, setLoadError] = useState<string | null>(null);
   const [dbConnected, setDbConnected] = useState<boolean | null>(null);
@@ -67,44 +69,23 @@ function AppContent() {
     };
   }, [load]);
 
-  // Sorteio automático
   useEffect(() => {
-    if (sorteioTriggered && !sorteioExecutedRef.current && brokers.length > 0 && (currentShift === 'manha' || hasAfternoonCheckIn(brokers))) {
-      sorteioExecutedRef.current = true;
-      executeSorteio(brokers, simSeconds, currentShift).then((result) => {
-        if (result) {
-          setSorteioResult(result);
-          load();
-        }
-      });
-    }
-  }, [sorteioTriggered, brokers, simSeconds, currentShift, load]);
+    if (loading || scheduleRunning.current) return;
+    scheduleRunning.current = true;
+    advanceSchedule({ seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate })
+      .then(draw => { setPendingDraw(draw); return load(); })
+      .catch(error => setLoadError(`Erro na agenda do plantão: ${error instanceof Error ? error.message : String(error)}`))
+      .finally(() => { scheduleRunning.current = false; });
+  }, [simSeconds, isExtendedShift, plantaoDate, loading, load]);
 
-  // Reset sorteio flag when clock is reset
   useEffect(() => {
-    if (!sorteioTriggered) {
-      sorteioExecutedRef.current = false;
-    }
-  }, [sorteioTriggered]);
-
-  // Auto-transition at 14:00h — export attendance snapshot then swap to afternoon queues
-  useEffect(() => {
-    if (isShiftTransition && !transitionExecutedRef.current && brokers.length > 0) {
-      transitionExecutedRef.current = true;
-      setTransitioning(true);
-      // Export relatorio_fechamento snapshot for the morning shift before clearing
-      exportRelatorioFechamento(queue, 'manha').then(() => {
-        transitionToAfternoon(brokers).then(() => {
-          setSorteioResult(null);
-          sorteioExecutedRef.current = false;
-          load().then(() => setTransitioning(false));
-        });
-      });
-    }
-    if (!isShiftTransition) {
-      transitionExecutedRef.current = false;
-    }
-  }, [isShiftTransition, brokers, load]);
+    const session = activeSession as (PlantaoSession & { schedule_data?: ShiftDraw }) | null;
+    if (!session?.schedule_data || localStorage.getItem('schedule_rotation_session') === session.id) return;
+    const first = session.schedule_data.firstAgency;
+    setCompanyDrawOrder([first, first === 'Viva Imóveis' ? 'Casa Nobre' : 'Viva Imóveis']);
+    setCompanyRotationIndex(0);
+    localStorage.setItem('schedule_rotation_session', session.id);
+  }, [activeSession]);
 
   const sortedQueue = interleaveQueue(queue, brokers, activeSession?.last_called_agency ?? null);
 
@@ -115,9 +96,6 @@ function AppContent() {
 
     await reiniciarPlantao(brokers);
     resetClock();
-    setSorteioResult(null);
-    sorteioExecutedRef.current = false;
-    transitionExecutedRef.current = false;
     await load();
     setReiniciando(false);
     setReiniciarDialog(false);
@@ -244,35 +222,17 @@ function AppContent() {
             </div>
 
           {/* Status banners */}
-          {transitioning && (
-            <div className="flex items-center gap-2 bg-indigo-500/10 border border-indigo-500/20 rounded-lg px-4 py-2 mb-2 text-sm text-indigo-400">
-              <ArrowRight className="h-4 w-4 shrink-0 animate-pulse" />
-              <span><strong className="text-indigo-300">Transição de turno às 14:00h</strong> — Fila da manhã extinta. Corretores em atendimento continuam com vaga reservada na tarde.</span>
-            </div>
-          )}
-
-          {sorteioTriggered && sorteioResult && !transitioning && (
-            <div className="flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-4 py-2 mb-2 text-sm text-emerald-400">
-              <Shuffle className="h-4 w-4 shrink-0" />
-              <span><strong className="text-emerald-300">Sorteio executado — Turno {sorteioResult.shift === 'manha' ? 'Manhã' : 'Tarde'}</strong> — {sorteioResult.vivaBrokers.length} corretores Viva + {sorteioResult.nobreBrokers.length} Casa Nobre intercalados. <strong className="text-amber-300">Desempate: {sorteioResult.desempateWinner} ganhou a preferência</strong>. {sorteioResult.lateBrokers.length} atrasado(s) no fim.</span>
-            </div>
-          )}
-
-          {sorteioTriggered && currentShift === 'tarde' && !hasAfternoonCheckIn(brokers) && simSeconds < ATENDIMENTO_TARDE_START && (
-            <div className="flex items-center gap-2 bg-amber-500/10 border border-amber-500/30 rounded-lg px-4 py-2 mb-2 text-sm text-amber-400">
-              <AlertTriangle className="h-4 w-4 shrink-0" />
-              <span><strong className="text-amber-300">Sorteio da tarde suspenso</strong> — nenhum corretor fez check-in para o turno da tarde. O sorteio será executado assim que houver corretores presentes.</span>
-            </div>
-          )}
-
-          {!sorteioTriggered && isPreSorteio && (
+          {schedule.overtime && <p className="text-amber-300 py-2">Hora extra opcional até 21h. Para dar saída, use “Encerrar expediente” no painel do corretor.</p>}
+          {schedule.closed && <p className="text-amber-300 py-2">Expediente encerrado. Os atendimentos em curso podem ser finalizados.</p>}
+          {schedule.coexistence && <p className="text-indigo-300 py-2">As filas da manhã seguem ativas. As três filas da tarde aguardam 14:00:01 na Auditoria.</p>}
+          {isPreSorteio && (
             <div className="flex items-center gap-2 bg-sky-500/10 border border-sky-500/20 rounded-lg px-4 py-2 mb-2 text-sm text-sky-400">
               <Clock className="h-4 w-4 shrink-0" />
               <span><strong className="text-sky-300">Período Pré-Sorteio</strong> — Atendimento por Ordem de Chegada. O primeiro corretor disponível que registrou presença atende. Sorteio automático às {currentShift === 'manha' ? '08:46:00' : '13:46:00'}.</span>
             </div>
           )}
 
-          {!sorteioTriggered && !isPreSorteio && !transitioning && (
+          {!sorteioTriggered && !isPreSorteio && (
             <div className="flex items-center gap-2 bg-slate-800/50 border border-slate-700/50 rounded-lg px-4 py-2 mb-2 text-sm text-slate-400">
               <Clock className="h-4 w-4 shrink-0 text-amber-400" />
               <span>Sorteio automático às <strong className="text-amber-400">{currentShift === 'manha' ? '08:46:00' : '13:46:00'}</strong>. {isCheckinOpen ? 'Check-in aberto — marque os corretores como presentes.' : 'Aguarde abertura do check-in.'}</span>
@@ -296,11 +256,13 @@ function AppContent() {
       </header>
 
       <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 py-6">
+        {loadError && <p role="alert" className="text-red-400 mb-4">{loadError}</p>}
+        {view === 'auditoria' && pendingDraw && <PendingShiftQueues draw={pendingDraw} brokers={brokers} />}
         {view === 'recepcao' && <RecepcaoPanel brokers={brokers} visits={visits} />}
         {view === 'chamadas' && <ChamadasPanel queue={queue} brokers={brokers} />}
         {view === 'corretor' && <CorretorPanel brokers={brokers} />}
         {view === 'fila' && <FilaPanel queue={sortedQueue} brokers={brokers} allQueue={queue} />}
-        {view === 'auditoria' && <AuditoriaPanel sorteioResult={sorteioResult} brokers={brokers} queue={queue} attendanceReport={attendanceReport} isAfternoonActive={isAfternoonActive} isMorningQueueActive={isMorningQueueActive} />}
+        {view === 'auditoria' && <AuditoriaPanel brokers={brokers} queue={queue} attendanceReport={attendanceReport} isAfternoonActive={isAfternoonActive} isMorningQueueActive={isMorningQueueActive} />}
       </main>
 
       <footer className="border-t border-slate-800 py-3 text-center text-xs text-slate-500">
@@ -369,91 +331,16 @@ function brokerStatusBadge(b: Broker): { label: string; color: string } {
   }
 }
 
-function AuditoriaPanel({ sorteioResult, brokers, queue, attendanceReport, isAfternoonActive, isMorningQueueActive }: {
-  sorteioResult: SorteioResult | null;
+function AuditoriaPanel({ brokers, queue, attendanceReport, isAfternoonActive, isMorningQueueActive }: {
   brokers: Broker[];
   queue: QueueEntry[];
   attendanceReport: QueueEntry[] | null;
   isAfternoonActive: boolean;
   isMorningQueueActive: boolean;
 }) {
+  const { isPreSorteio: isPreOpening } = useSim();
   return (
     <div className="space-y-6">
-      {/* Sorteio Visual */}
-      <div className="bg-slate-900 rounded-2xl border border-slate-800 p-6">
-        <div className="flex items-center gap-3 mb-6">
-          <div className="bg-amber-500/10 p-3 rounded-xl"><Shuffle className="h-6 w-6 text-amber-400" /></div>
-          <div>
-            <h2 className="text-xl font-bold">Sorteio Interno — Intercalação Real</h2>
-            <p className="text-sm text-slate-400">Resultado visual do embaralhamento e intercalação das duas imobiliárias</p>
-          </div>
-        </div>
-
-        {!sorteioResult ? (
-          <div className="text-center py-12">
-            <Clock className="h-12 w-12 text-slate-600 mx-auto mb-3" />
-            <p className="text-slate-400">O sorteio ainda não foi executado.</p>
-            <p className="text-sm text-slate-500 mt-1">Aguarde o relógio chegar ao horário do sorteio ou avance o tempo manualmente.</p>
-          </div>
-        ) : (
-          <div className="space-y-6">
-            {/* Shift badge */}
-            <div className="flex items-center gap-2 mb-2">
-              <span className={`text-xs px-3 py-1 rounded-full font-medium ${sorteioResult.shift === 'manha' ? 'bg-amber-500/15 text-amber-400' : 'bg-indigo-500/15 text-indigo-400'}`}>
-                {sorteioResult.shift === 'manha' ? 'Turno Manhã' : 'Turno Tarde'}
-              </span>
-            </div>
-
-            {/* Sorteio entre Empresas — banner em destaque */}
-            <div className={`rounded-xl p-5 border-2 ${sorteioResult.desempateWinner === 'Viva Imóveis' ? 'bg-amber-500/10 border-amber-500/40' : 'bg-sky-500/10 border-sky-500/40'}`}>
-              <div className="flex items-center gap-3">
-                <div className={`p-3 rounded-xl ${sorteioResult.desempateWinner === 'Viva Imóveis' ? 'bg-amber-500/20' : 'bg-sky-500/20'}`}>
-                  <Trophy className={`h-8 w-8 ${sorteioResult.desempateWinner === 'Viva Imóveis' ? 'text-amber-400' : 'text-sky-400'}`} />
-                </div>
-                <div>
-                  <p className="text-xs uppercase tracking-wide text-slate-400">Sorteio entre Empresas (Desempate)</p>
-                  <p className="text-xl font-bold text-white">
-                    <span className={sorteioResult.desempateWinner === 'Viva Imóveis' ? 'text-amber-400' : 'text-sky-400'}>{sorteioResult.desempateWinner}</span> ganhou a preferência e inicia a intercalação do plantão
-                  </p>
-                  <p className="text-sm text-slate-400 mt-1">
-                    Ordem de intercalação: {sorteioResult.desempateWinner === 'Viva Imóveis' ? 'A1, B1, A2, B2…' : 'B1, A1, B2, A2…'}
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* Listas individuais */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-4">
-                <h3 className="font-bold text-amber-400 mb-3 flex items-center gap-2"><Building2 className="h-4 w-4" /> Viva Imóveis (embaralhado)</h3>
-                <div className="space-y-2">
-                  {sorteioResult.vivaBrokers.map((b, i) => (
-                    <div key={b.id} className="flex items-center gap-2 bg-slate-800/50 rounded-lg p-2.5">
-                      <span className="font-mono text-sm text-slate-500 w-6">{i + 1}.</span>
-                      <span className="text-white text-sm">{b.operational_name}</span>
-                    </div>
-                  ))}
-                  {sorteioResult.vivaBrokers.length === 0 && <p className="text-sm text-slate-500">Nenhum corretor presente.</p>}
-                </div>
-              </div>
-
-              <div className="bg-sky-500/5 border border-sky-500/20 rounded-xl p-4">
-                <h3 className="font-bold text-sky-400 mb-3 flex items-center gap-2"><Building2 className="h-4 w-4" /> Casa Nobre (embaralhado)</h3>
-                <div className="space-y-2">
-                  {sorteioResult.nobreBrokers.map((b, i) => (
-                    <div key={b.id} className="flex items-center gap-2 bg-slate-800/50 rounded-lg p-2.5">
-                      <span className="font-mono text-sm text-slate-500 w-6">{i + 1}.</span>
-                      <span className="text-white text-sm">{b.operational_name}</span>
-                    </div>
-                  ))}
-                  {sorteioResult.nobreBrokers.length === 0 && <p className="text-sm text-slate-500">Nenhum corretor presente.</p>}
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-
       {/* Relatório de Atendimentos */}
       {attendanceReport && (
         <div className="bg-slate-900 rounded-2xl border border-slate-800 p-6">
@@ -505,6 +392,7 @@ function AuditoriaPanel({ sorteioResult, brokers, queue, attendanceReport, isAft
       )}
 
       {/* FILA DE ORDEM DE CHEGADA — fixada para auditoria */}
+      {isPreOpening && (
       <div className="bg-slate-900 rounded-2xl border border-sky-500/20 p-6">
         <div className="flex items-center gap-3 mb-5">
           <div className="bg-sky-500/10 p-3 rounded-xl"><Clock className="h-6 w-6 text-sky-400" /></div>
@@ -534,6 +422,7 @@ function AuditoriaPanel({ sorteioResult, brokers, queue, attendanceReport, isAft
           )}
         </div>
       </div>
+      )}
 
       {/* TRÊS FILAS ISOLADAS — Tempo Real */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
