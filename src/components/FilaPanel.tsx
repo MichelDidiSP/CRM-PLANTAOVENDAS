@@ -1,6 +1,6 @@
 import { Bell, CircleCheck as CheckCircle2, Eye, ArrowLeftRight, Clock, TriangleAlert as AlertTriangle, UserCheck, History, Chrome as Home, Repeat, Sun, Moon } from 'lucide-react';
 import { supabase, type Broker, type QueueEntry, type Agency } from '@/lib/supabase';
-import { isLateForSort, interleaveQueue, reverseInterleaveQueue, nextBrokerFromInverseQueue, nextBrokerForGeneralQueue, nextBrokerByArrival, nextBrokerFromInverseTop, moveBrokerToEndOfDirectQueue, moveBrokerToEndOfInverseQueue, dispatchBroker, isArrivalOrderMode, nextBrokerByArrivalAnyAgency, nextBrokerByArrivalInverse, ATENDIMENTO_MANHA_START, markBrokerInService, markStandardBrokerInService } from '@/lib/queueEngine';
+import { markMeritReturns, concludeAttendance, isLateForSort, interleaveQueue, reverseInterleaveQueue, nextBrokerFromInverseQueue, nextBrokerForGeneralQueue, nextBrokerByArrival, nextBrokerFromInverseTop, moveBrokerToEndOfDirectQueue, moveBrokerToEndOfInverseQueue, dispatchBroker, isArrivalOrderMode, nextBrokerByArrivalAnyAgency, nextBrokerByArrivalInverse, ATENDIMENTO_MANHA_START, markBrokerInService, markStandardBrokerInService } from '@/lib/queueEngine';
 import { useSim } from '@/lib/simContext';
 
 type Props = {
@@ -59,8 +59,10 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
     const referredBrokerId = entry.visit?.referred_broker_id ?? null;
     const lastCalledAgency = await getLastCalledAgency();
     const { broker } = dispatchBroker(brokers, entry.queue_type, simSeconds, busyBrokerIds, lastCalledAgency, referredBrokerId);
-    await updateEntryToCalling(entry, broker?.id ?? null, referredBrokerId === null && entry.queue_type === 'geral');
-    if (broker && entry.queue_type === 'geral') {
+    if (!broker) return;
+    if (entry.visit?.visit_reason === 'Primeira visita') await markMeritReturns(brokers, broker, allQueue);
+    await updateEntryToCalling(entry, broker.id, referredBrokerId === null && entry.queue_type === 'geral');
+    if (broker && entry.visit?.visit_reason === 'Primeira visita') {
       await updateLastCalledAgency(broker.agency);
     }
   }
@@ -141,37 +143,7 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
   }
 
   async function conclude(entry: QueueEntry) {
-    const visitReason = entry.visit?.visit_reason;
-    const isIndicacao = visitReason === 'Indicação';
-    const isRetorno = visitReason === 'Retorno';
-
-    // POSITION PROTECTION: if the service started before 09:00h (pre-sorteio),
-    // or is an Indicação, or is a Retorno de Cliente — the broker keeps
-    // their current queue position. Only status changes to 'livre'.
-    const calledAtSeconds = entry.called_at
-      ? new Date(entry.called_at).getHours() * 3600 + new Date(entry.called_at).getMinutes() * 60 + new Date(entry.called_at).getSeconds()
-      : 0;
-    const startedBeforeSorteio = calledAtSeconds > 0 && calledAtSeconds < ATENDIMENTO_MANHA_START;
-    const protectPosition = isIndicacao || isRetorno || startedBeforeSorteio;
-
-    const isDecorado = entry.queue_type === 'decorado';
-
-    await supabase.from('queue_entries').update({ queue_status: 'concluido', updated_at: new Date().toISOString() }).eq('id', entry.id);
-    if (entry.visit_id) {
-      await supabase.from('visits').update({ status: 'encerrado' }).eq('id', entry.visit_id);
-    }
-    if (entry.broker_id) {
-      await supabase.from('brokers').update({ attendance_status: 'livre', last_status_update: new Date().toISOString() }).eq('id', entry.broker_id);
-      if (!protectPosition) {
-        // Decorado re-entry: push to end of inverse queue only (isolated)
-        // Regular service: push to end of own company's direct queue only (isolated)
-        if (isDecorado) {
-          await moveBrokerToEndOfInverseQueue(entry.broker_id, brokers);
-        } else {
-          await moveBrokerToEndOfDirectQueue(entry.broker_id, brokers);
-        }
-      }
-    }
+    await concludeAttendance(entry, new Date().toISOString());
   }
 
   async function cancelCall(entry: QueueEntry) {

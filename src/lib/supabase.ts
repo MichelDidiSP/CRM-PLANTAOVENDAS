@@ -55,6 +55,7 @@ export type QueueType = 'geral' | 'decorado' | 'parceria';
 export type Shift = 'manha' | 'tarde';
 
 export type Broker = {
+  merit_priority_return?: boolean;
   id: string;
   operational_name: string;
   agency: Agency;
