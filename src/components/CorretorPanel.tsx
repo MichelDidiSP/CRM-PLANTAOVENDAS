@@ -1,9 +1,11 @@
+import BrokerPauseDetails from './BrokerPauseDetails';
+import { actOnPause } from '@/lib/queue/pauseAndPartnersStore';
 import { enrollAfternoon, leaveOvertime } from '@/lib/queue/shiftScheduleStore';
 import { scheduleAt, enrolledForAfternoon, type ScheduledBroker } from '@/lib/queue/shiftSchedule';
 import { useState } from 'react';
 import { UserCheck, UserX, Clock, Coffee, Table2, Chrome as Home, CircleCheck as CheckCircle, Plus, Trash2, ExternalLink, Users as Users2, Sun, Moon, Bookmark, Eye } from 'lucide-react';
 import { supabase, type Broker, type BrokerPresence, type AttendanceStatus, type Agency, type Shift } from '@/lib/supabase';
-import { AGENCIES, isLateForSort, isBeyondBarrier, pushLateBrokerToQueues, markReturningFromPause, equipesForAgency, BARRIER_MANHA, BARRIER_TARDE } from '@/lib/queueEngine';
+import { AGENCIES, isLateForSort, equipesForAgency, BARRIER_MANHA, BARRIER_TARDE } from '@/lib/queueEngine';
 import { useSim } from '@/lib/simContext';
 
 type Props = { brokers: Broker[] };
@@ -13,12 +15,9 @@ export default function CorretorPanel({ brokers }: Props) {
   const clock = { seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate };
   const schedule = scheduleAt(clock);
   const [showAdd, setShowAdd] = useState(false);
-  const [showAddPartner, setShowAddPartner] = useState(false);
   const [newName, setNewName] = useState('');
   const [newAgency, setNewAgency] = useState<Agency>('Viva Imóveis');
   const [newEquipe, setNewEquipe] = useState('');
-  const [partnerName, setPartnerName] = useState('');
-  const [partnerCompany, setPartnerCompany] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   const internalBrokers = brokers.filter((b) => !b.is_external_partner);
@@ -29,35 +28,17 @@ export default function CorretorPanel({ brokers }: Props) {
   const lateCount = present.filter((b) => isLateForSort(b.arrived_at, b.shift ?? currentShift)).length;
   const reservedCount = internalBrokers.filter((b) => b.afternoon_reserved).length;
 
-  const barrierTime = currentShift === 'manha' ? '09:29:59' : '14:29:59';
+  const barrierTime = currentShift === 'manha' ? '09:30:00' : '14:30:00';
   const barrierSec = currentShift === 'manha' ? BARRIER_MANHA : BARRIER_TARDE;
   const simSec = getCurrentTime().getHours() * 3600 + getCurrentTime().getMinutes() * 60 + getCurrentTime().getSeconds();
-  const isBarrierActive = simSec >= barrierSec;
+  const isBarrierActive = simSec > barrierSec;
 
   async function updatePresence(broker: Broker, status: BrokerPresence) {
-    if (status === 'ausente' && schedule.overtime) { await leaveOvertime(broker); return; }
     if (status === 'presente' && schedule.closed) return;
-    const now = getCurrentTime().toISOString();
-    const updates: Partial<Broker> & { last_status_update: string } = { presence_status: status, last_status_update: now };
-    if (status === 'presente' && !broker.arrived_at) {
-      updates.arrived_at = now;
-      updates.shift = currentShift;
-      const checkSec = getCurrentTime().getHours() * 3600 + getCurrentTime().getMinutes() * 60 + getCurrentTime().getSeconds();
-      if (isBeyondBarrier(checkSec, currentShift)) {
-        updates.attendance_status = 'apenas_indicacao';
-      } else {
-        const isLate = isLateForSort(now, currentShift);
-        if (isLate) {
-          await supabase.from('brokers').update(updates).eq('id', broker.id);
-          await pushLateBrokerToQueues(broker.id, internalBrokers);
-          return;
-        }
-      }
-    }
-    await supabase.from('brokers').update(updates).eq('id', broker.id);
-    if (status === 'presente' && (broker.presence_status === 'pausa' || broker.presence_status === 'ausente')) {
-      await markReturningFromPause(broker.id, internalBrokers);
-    }
+    try {
+      await actOnPause(broker.id, status === 'presente' ? 'checkin' : 'pause', { at: getCurrentTime().toISOString(), shift: currentShift });
+      setError(null);
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   }
 
   async function updateAttendance(broker: Broker, status: AttendanceStatus) {
@@ -70,14 +51,6 @@ export default function CorretorPanel({ brokers }: Props) {
     const { error } = await supabase.from('brokers').insert({ operational_name: newName.trim(), agency: newAgency, equipe: newEquipe, presence_status: 'ausente', attendance_status: 'livre', is_external_partner: false });
     if (error) { setError('Erro ao adicionar corretor.'); }
     else { setNewName(''); setNewEquipe(''); setShowAdd(false); setError(null); }
-  }
-
-  async function addPartnerBroker(e: React.FormEvent) {
-    e.preventDefault();
-    if (!partnerName.trim()) return;
-    const { error } = await supabase.from('brokers').insert({ operational_name: partnerName.trim(), agency: 'Externo', presence_status: 'ausente', attendance_status: 'parceiro', is_external_partner: true, external_company: partnerCompany.trim() || null });
-    if (error) { setError('Erro ao adicionar corretor parceiro.'); }
-    else { setPartnerName(''); setPartnerCompany(''); setShowAddPartner(false); setError(null); }
   }
 
   async function removeBroker(id: string) {
@@ -141,24 +114,7 @@ export default function CorretorPanel({ brokers }: Props) {
           </button>
         )}
 
-        {showAddPartner ? (
-          <form onSubmit={addPartnerBroker} className="bg-slate-900 rounded-2xl border border-sky-500/20 p-5 flex flex-wrap items-end gap-3 w-full">
-            <div className="flex-1 min-w-[200px]">
-              <label className="block text-sm text-slate-400 mb-1">Nome do corretor parceiro</label>
-              <input type="text" value={partnerName} onChange={(e) => setPartnerName(e.target.value)} placeholder="Nome do corretor autônomo ou externo" className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500" />
-            </div>
-            <div className="flex-1 min-w-[200px]">
-              <label className="block text-sm text-slate-400 mb-1">Empresa / Imobiliária externa (opcional)</label>
-              <input type="text" value={partnerCompany} onChange={(e) => setPartnerCompany(e.target.value)} placeholder="Ex: Imobiliária ABC ou Autônomo" className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500" />
-            </div>
-            <button type="submit" className="bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold px-5 py-2.5 rounded-xl transition">Adicionar parceiro</button>
-            <button type="button" onClick={() => setShowAddPartner(false)} className="text-slate-400 hover:text-white px-3 py-2.5">Cancelar</button>
-          </form>
-        ) : (
-          <button onClick={() => setShowAddPartner(true)} className="flex items-center gap-2 bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 font-medium px-5 py-2.5 rounded-xl transition border border-sky-500/20">
-            <ExternalLink className="h-5 w-5" /> Adicionar corretor parceiro externo
-          </button>
-        )}
+
       </div>
 
       <div>
@@ -190,11 +146,11 @@ export default function CorretorPanel({ brokers }: Props) {
                       {enrolledForAfternoon(broker as ScheduledBroker, plantaoDate) ? 'Inscrito na tarde' : 'Inscrever na tarde'}
                     </button>}
                     {schedule.overtime && <button className="px-3 py-2 rounded-lg bg-slate-700 text-sm" onClick={() => leaveOvertime(broker).catch(e => setError(String(e)))}>Encerrar expediente</button>}
-                    <PresenceButton active={broker.presence_status === 'presente'} onClick={() => updatePresence(broker, 'presente')} icon={<UserCheck className="h-4 w-4" />} label="Presente" color="emerald" />
-                    <PresenceButton active={broker.presence_status === 'pausa'} onClick={() => updatePresence(broker, 'pausa')} icon={<Coffee className="h-4 w-4" />} label="Pausa" color="amber" />
-                    <PresenceButton active={broker.presence_status === 'ausente'} onClick={() => updatePresence(broker, 'ausente')} icon={<UserX className="h-4 w-4" />} label="Ausente" color="slate" />
+                    <PresenceButton active={broker.presence_status === 'presente'} onClick={() => updatePresence(broker, 'presente')} icon={<UserCheck className="h-4 w-4" />} label={broker.presence_status === 'pausa' ? 'Voltar da Pausa' : 'Registrar presença'} color="emerald" />
+                    <PresenceButton active={broker.presence_status === 'pausa'} onClick={() => updatePresence(broker, 'pausa')} icon={<Coffee className="h-4 w-4" />} label="Pausar" color="amber" />
                   </div>
                 </div>
+                <BrokerPauseDetails broker={broker} clock={{ at: getCurrentTime().toISOString(), shift: currentShift }} />
                 <div>
                   <p className="text-xs uppercase tracking-wide text-slate-500 mb-2">Atendimento</p>
                   <div className="flex flex-wrap gap-2">

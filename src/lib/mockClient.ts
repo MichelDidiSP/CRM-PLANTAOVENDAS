@@ -69,6 +69,9 @@ function createSeedData(): Record<string, Row[]> {
     queue_entries: [],
     plantao_sessions: [],
     relatorio_fechamento: [],
+    pause_audit: [],
+    external_partner_intakes: [],
+    external_partner_reservations: [],
   };
 }
 
