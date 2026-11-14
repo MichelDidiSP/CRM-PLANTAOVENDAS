@@ -1,3 +1,4 @@
+import { onlyOwn } from '@/lib/queue/pauseAndPartners';
 import { scheduleAt, preOpeningChoice } from '@/lib/queue/shiftSchedule';
 import { useState, useRef, useMemo } from 'react';
 import { UserPlus, Phone, TriangleAlert as AlertTriangle, CircleCheck as CheckCircle2, Clock, Search, EyeOff, Eye, Zap, UserCheck, UserX, Building2, Trash2, X } from 'lucide-react';
@@ -141,6 +142,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
 
   function choosePreOpeningBroker(ownerId: string | null): string | null {
     if (!isArrivalOrderDispatchActive(simSeconds, isExtendedShift) || !ownerId) return null;
+    if (brokers.some(b => b.id === ownerId && onlyOwn(b))) return null;
     const choice = preOpeningChoice(brokers, ownerId);
     if (!choice.needsChoice) return null;
     const wait = window.confirm('O corretor ainda não está inscrito. O cliente deseja aguardar? OK para aguardar; Cancelar para atender com o primeiro inscrito da mesma imobiliária.');
@@ -411,7 +413,6 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
               >
                 <option value="Primeira visita">Vez Geral</option>
                 <option value="Visita ao Decorado">Visita ao Decorado</option>
-                <option value="Parceria">Parceria</option>
                 <option value="Indicação Presente">Indicação: Corretor Presente</option>
                 <option value="Indicação Ausente">Indicação: Corretor Ausente</option>
                 <option value="Indicação Imobiliária">Indicação: Só a Imobiliária</option>
@@ -579,7 +580,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
                 onChange={(e) => handleReasonChange(e.target.value as VisitReason)}
                 className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-amber-500 transition"
               >
-                {REASONS.map((r) => (
+                {REASONS.filter(r => r !== 'Parceria').map((r) => (
                   <option key={r} value={r}>{r}</option>
                 ))}
               </select>

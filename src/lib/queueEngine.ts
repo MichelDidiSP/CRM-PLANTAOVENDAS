@@ -1,3 +1,4 @@
+import { onlyOwn, distributionBrokers, restrictedOwner } from './queue/pauseAndPartners';
 import { getScheduleClock, scheduleAt, preOpeningBroker, activeBrokers } from './queue/shiftSchedule';
 import { firstFree, reverseCoverage, meritCandidates, completionPatch } from './queue/coreDistribution';
 import { supabase, dbReady, type Broker, type QueueEntry, type Visit, type VisitReason, type Agency, type QueueType, type PlantaoSession, type Shift } from './supabase';
@@ -28,7 +29,7 @@ export function isBeyondBarrier(simSeconds: number, shift: Shift = 'manha'): boo
 }
 
 export function isApenasIndicacao(broker: Broker): boolean {
-  return broker.attendance_status === 'apenas_indicacao';
+  return onlyOwn(broker);
 }
 
 export function isLateCheckIn(broker: Broker): boolean {
@@ -582,7 +583,7 @@ export function nextBrokerForGeneralQueue(
 
 export function nextBrokerByArrival(brokers: Broker[], agency: Agency, excludeIds: Set<string>): Broker | undefined {
   const agencyBrokers = brokers
-    .filter((b) => !b.is_external_partner && b.agency === agency && b.presence_status === 'presente' && b.attendance_status === 'livre' && !excludeIds.has(b.id))
+    .filter((b) => !b.is_external_partner && b.agency === agency && b.presence_status === 'presente' && b.attendance_status === 'livre' && !isApenasIndicacao(b) && !excludeIds.has(b.id))
     .sort((a, b) => {
       const aTime = a.arrived_at ? new Date(a.arrived_at).getTime() : Infinity;
       const bTime = b.arrived_at ? new Date(b.arrived_at).getTime() : Infinity;
@@ -658,7 +659,7 @@ export function lastBrokerFromCompany(brokers: Broker[], agency: Agency, exclude
  */
 export async function pushLateBrokerToQueues(brokerId: string, brokers: Broker[]): Promise<void> {
   const broker = brokers.find((b) => b.id === brokerId);
-  if (!broker) return;
+  if (!broker || onlyOwn(broker)) return;
 
   // Direct queue: push to end within the same agency
   const sameAgencyDirect = brokers.filter((b) => !b.is_external_partner && b.agency === broker.agency && b.sorteio_order != null);
@@ -694,7 +695,7 @@ export async function pushLateBrokerToQueues(brokerId: string, brokers: Broker[]
 
 export async function markReturningFromPause(brokerId: string, brokers: Broker[]): Promise<void> {
   const broker = brokers.find((b) => b.id === brokerId);
-  if (!broker) return;
+  if (!broker || onlyOwn(broker)) return;
   const [head] = eligibleBrokersFromAgency(brokers, broker.agency, new Set([brokerId]));
   const turnPassedOrNow = head !== undefined && (broker.sorteio_order ?? 999_999) <= (head.sorteio_order ?? 999_999);
   await supabase.from('brokers').update({ returning_from_pause: turnPassedOrNow }).eq('id', brokerId);
@@ -717,6 +718,9 @@ export function distributeIndicacao(
     return { broker: undefined, consumesVez: true, source: 'last_of_agency', equipe: null, protectedPosition: false };
   }
 
+  const restricted = restrictedOwner(brokers, referredBrokerId, 'geral', excludeIds);
+  if (restricted) return { ...restricted, source: 'named', equipe: restricted.broker?.equipe ?? null };
+  brokers = distributionBrokers(brokers, referredBrokerId);
   const referred = brokers.find((b) => b.id === referredBrokerId);
   if (!referred) {
     return { broker: undefined, consumesVez: true, source: 'last_of_agency', equipe: null, protectedPosition: false };
@@ -759,6 +763,13 @@ export function dispatchBroker(
   lastCalledAgency: Agency | null,
   referredBrokerId: string | null,
 ): { broker: Broker | undefined; agency: Agency; consumesVez: boolean; protectedPosition: boolean; source: string } {
+  const limited = restrictedOwner(brokers, referredBrokerId, queueType, excludeIds);
+  if (limited) {
+    const current = getScheduleClock();
+    if (current && !scheduleAt(current).acceptingClients) return { ...limited, broker: undefined };
+    return limited;
+  }
+  brokers = distributionBrokers(brokers);
   const clock = getScheduleClock();
   if (clock) {
     const state = scheduleAt({ ...clock, seconds: simSeconds });
@@ -816,7 +827,7 @@ export function dispatchBroker(
  */
 export async function moveBrokerToEndOfDirectQueue(brokerId: string, brokers: Broker[]): Promise<void> {
   const broker = brokers.find((b) => b.id === brokerId);
-  if (!broker) return;
+  if (!broker || onlyOwn(broker)) return;
 
   const sameAgencyDirect = brokers.filter((b) => !b.is_external_partner && b.agency === broker.agency && b.sorteio_order != null);
   const maxDirect = sameAgencyDirect.length > 0 ? Math.max(...sameAgencyDirect.map((b) => b.sorteio_order ?? 0)) : 0;
@@ -978,7 +989,7 @@ export async function fetchAll() {
 }
 
 export async function markMeritReturns(brokers: Broker[], selected: Broker, entries: QueueEntry[]) {
-  const ids = meritCandidates(brokers, selected, entries).map(b => b.id);
+  const ids = meritCandidates(brokers.filter(b => !onlyOwn(b)), selected, entries).map(b => b.id);
   if (!ids.length) return;
   const { error } = await supabase.from('brokers').update({ merit_priority_return: true }).in('id', ids);
   if (error) throw error;

@@ -1,3 +1,7 @@
+import PauseAuditPanel from '@/components/PauseAuditPanel';
+import { enforcePauses, resetPauseState } from '@/lib/queue/pauseAndPartnersStore';
+import { onlyOwn } from '@/lib/queue/pauseAndPartners';
+import ExternalPartnerPanel from '@/components/ExternalPartnerPanel';
 import { advanceSchedule } from '@/lib/queue/shiftScheduleStore';
 import { scheduleAt, type ShiftDraw } from '@/lib/queue/shiftSchedule';
 import PendingShiftQueues from '@/components/PendingShiftQueues';
@@ -15,7 +19,7 @@ import FilaPanel from '@/components/ScheduledFilaPanel';
 type View = 'recepcao' | 'chamadas' | 'corretor' | 'fila' | 'auditoria';
 
 function AppContent() {
-  const { clockDisplay, setStartTime, addMinute, jumpToAfternoon, testMode, setTestMode, sorteioTriggered, resetClock, simSeconds, currentShift, isWeekday, plantaoDate, setPlantaoDate, isPreSorteio, isCheckinOpen, isAtendimentoActive, isShiftTransition, isAfternoonActive, isMorningQueueActive, isExtendedShift } = useSim();
+  const { clockDisplay, setStartTime, addMinute, jumpToAfternoon, testMode, setTestMode, sorteioTriggered, resetClock, simSeconds, currentShift, isWeekday, plantaoDate, setPlantaoDate, isPreSorteio, isCheckinOpen, isAtendimentoActive, isShiftTransition, isAfternoonActive, isMorningQueueActive, isExtendedShift, getCurrentTime } = useSim();
   const schedule = scheduleAt({ seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate });
   const [pendingDraw, setPendingDraw] = useState<ShiftDraw | null>(null);
   const scheduleRunning = useRef(false);
@@ -73,10 +77,10 @@ function AppContent() {
     if (loading || scheduleRunning.current) return;
     scheduleRunning.current = true;
     advanceSchedule({ seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate })
-      .then(draw => { setPendingDraw(draw); return load(); })
+      .then(async draw => { setPendingDraw(draw); await enforcePauses({ at: getCurrentTime().toISOString(), shift: currentShift }); return load(); })
       .catch(error => setLoadError(`Erro na agenda do plantão: ${error instanceof Error ? error.message : String(error)}`))
       .finally(() => { scheduleRunning.current = false; });
-  }, [simSeconds, isExtendedShift, plantaoDate, loading, load]);
+  }, [simSeconds, isExtendedShift, plantaoDate, loading, load, getCurrentTime, currentShift]);
 
   useEffect(() => {
     const session = activeSession as (PlantaoSession & { schedule_data?: ShiftDraw }) | null;
@@ -94,6 +98,7 @@ function AppContent() {
     const concluded = queue.filter((e) => e.queue_status === 'concluido' || e.queue_status === 'em_atendimento');
     setAttendanceReport(concluded);
 
+    await resetPauseState();
     await reiniciarPlantao(brokers);
     resetClock();
     await load();
@@ -257,12 +262,13 @@ function AppContent() {
 
       <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 py-6">
         {loadError && <p role="alert" className="text-red-400 mb-4">{loadError}</p>}
+        {view === 'auditoria' && <PauseAuditPanel brokers={brokers} />}
         {view === 'auditoria' && pendingDraw && <PendingShiftQueues draw={pendingDraw} brokers={brokers} />}
-        {view === 'recepcao' && <RecepcaoPanel brokers={brokers} visits={visits} />}
-        {view === 'chamadas' && <ChamadasPanel queue={queue} brokers={brokers} />}
-        {view === 'corretor' && <CorretorPanel brokers={brokers} />}
+        {view === 'recepcao' && <><ExternalPartnerPanel /><RecepcaoPanel brokers={brokers} visits={visits} /></>}
+        {view === 'chamadas' && <><ExternalPartnerPanel callsOnly /><ChamadasPanel queue={queue} brokers={brokers} /></>}
+        {view === 'corretor' && <><CorretorPanel brokers={brokers} /><ExternalPartnerPanel managementOnly /></>}
         {view === 'fila' && <FilaPanel queue={sortedQueue} brokers={brokers} allQueue={queue} />}
-        {view === 'auditoria' && <AuditoriaPanel brokers={brokers} queue={queue} attendanceReport={attendanceReport} isAfternoonActive={isAfternoonActive} isMorningQueueActive={isMorningQueueActive} />}
+        {view === 'auditoria' && <AuditoriaPanel brokers={brokers.filter(b => !onlyOwn(b))} queue={queue} attendanceReport={attendanceReport} isAfternoonActive={isAfternoonActive} isMorningQueueActive={isMorningQueueActive} />}
       </main>
 
       <footer className="border-t border-slate-800 py-3 text-center text-xs text-slate-500">
