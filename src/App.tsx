@@ -1,3 +1,5 @@
+import ShiftClosingDashboard from '@/components/ShiftClosingDashboard';
+import { loadReportRows } from '@/lib/reports/reportStore';
 import PauseAuditPanel from '@/components/PauseAuditPanel';
 import { enforcePauses, resetPauseState } from '@/lib/queue/pauseAndPartnersStore';
 import { onlyOwn } from '@/lib/queue/pauseAndPartners';
@@ -104,6 +106,7 @@ function AppContent() {
     const concluded = queue.filter((e) => e.queue_status === 'concluido' || e.queue_status === 'em_atendimento');
     setAttendanceReport(concluded);
 
+    if (typeof supabase.rpc !== 'function') await loadReportRows({ period: 'week', date: plantaoDate, shift: currentShift });
     await resetPauseState();
     await reiniciarPlantao(brokers);
     resetClock();
@@ -268,6 +271,7 @@ function AppContent() {
 
       <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 py-6">
         {loadError && <p role="alert" className="text-red-400 mb-4">{loadError}</p>}
+        {view === 'auditoria' && <ShiftClosingDashboard />}
         {view === 'auditoria' && <PauseAuditPanel brokers={brokers} />}
         {(schedule.afternoonActive ? afternoonDraw : morningDraw) && <p className="mb-4 text-lg text-amber-300">Ordem do Sorteio: 1ª {(schedule.afternoonActive ? afternoonDraw : morningDraw)!.firstAgency} | 2ª {(schedule.afternoonActive ? afternoonDraw : morningDraw)!.firstAgency === 'Viva Imóveis' ? 'Casa Nobre' : 'Viva Imóveis'}</p>}
         {morningDraw && schedule.preOpening && <PendingShiftQueues draw={morningDraw} brokers={brokers} title="Sorteio da manhã — ativação às 09:00. Ordem de chegada continua ativa." />}

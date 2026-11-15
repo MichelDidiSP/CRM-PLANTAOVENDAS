@@ -1,3 +1,4 @@
+import { MEDIA_CHANNELS, mediaChannelFields } from '@/lib/reports/shiftClosingReport';
 import { normalizePhone, maskPhone, firstName, lookupReturn, intakeRoute, recentVisits, attendanceTrace } from '@/lib/reception/intake';
 import { onlyOwn } from '@/lib/queue/pauseAndPartners';
 import { scheduleAt, preOpeningChoice } from '@/lib/queue/shiftSchedule';
@@ -23,6 +24,8 @@ type Props = {
 
 export default function RecepcaoPanel({ brokers, visits, queue }: Props) {
   const [customerName, setCustomerName] = useState('');
+  const [mediaChannel, setMediaChannel] = useState('');
+  const [mediaChannelDetail, setMediaChannelDetail] = useState('');
   const [phone, setPhone] = useState('');
   const [noPhone, setNoPhone] = useState(false);
   const [returnMatch, setReturnMatch] = useState<Awaited<ReturnType<typeof lookupReturn>>>(null);
@@ -161,14 +164,14 @@ export default function RecepcaoPanel({ brokers, visits, queue }: Props) {
       const preOpeningAssignee = choosePreOpeningBroker(route.referred_broker_id);
       const timestamp = getCurrentTime().toISOString();
       const { queue_type, ...visit } = route;
-      const result = await supabase.from('visits').insert({ ...visit, customer_name: customerName.trim(), pre_opening_assignee: preOpeningAssignee, status: 'aguardando', created_at: timestamp }).select().single();
+      const result = await supabase.from('visits').insert({ ...visit, ...mediaChannelFields(mediaChannel, mediaChannelDetail), customer_name: customerName.trim(), pre_opening_assignee: preOpeningAssignee, status: 'aguardando', created_at: timestamp }).select().single();
       if (result.error || !result.data) throw result.error || new Error('Não foi possível cadastrar a visita.');
       createdId = result.data.id;
       const queued = await supabase.from('queue_entries').insert({ visit_id: createdId, agency: brokers.find(b => b.id === route.referred_broker_id)?.agency ?? 'Viva Imóveis', queue_status: 'aguardando', attempts: 0, queue_type, shift: currentShift, created_at: timestamp });
       if (queued.error) throw queued.error;
       createdId = null;
       setMessage({ type: 'success', text: `${firstName(customerName)} entrou na fila como ${route.visit_reason}.` });
-      setCustomerName(''); setPhone(''); setNoPhone(false); setReason('Primeira visita'); setReferredBrokerId(''); setSelectedBroker(null); setBrokerSearch(''); setReturnMatch(null);
+      setCustomerName(''); setMediaChannel(''); setMediaChannelDetail(''); setPhone(''); setNoPhone(false); setReason('Primeira visita'); setReferredBrokerId(''); setSelectedBroker(null); setBrokerSearch(''); setReturnMatch(null);
     } catch (error) {
       if (createdId) await supabase.from('visits').delete().eq('id', createdId);
       setMessage({ type: 'error', text: error instanceof Error ? error.message : 'Não foi possível concluir o cadastro. Tente novamente.' });
@@ -444,6 +447,17 @@ export default function RecepcaoPanel({ brokers, visits, queue }: Props) {
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-5">
+            <div className="grid sm:grid-cols-2 gap-3 items-end">
+              <label className="block text-sm font-medium text-slate-300">Canal de Mídia (opcional)
+                <select aria-label="Canal de Mídia" value={mediaChannel} onChange={e => { setMediaChannel(e.target.value); setMediaChannelDetail(''); }} className="mt-2 w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white">
+                  <option value="">Não informado</option>
+                  {MEDIA_CHANNELS.map(channel => <option key={channel} value={channel}>{channel}</option>)}
+                </select>
+              </label>
+              {mediaChannel === 'Outros' && <label className="block text-sm font-medium text-slate-300">Especifique a ação de captação (opcional)
+                <input aria-label="Detalhe do canal Outros" type="text" value={mediaChannelDetail} onChange={e => setMediaChannelDetail(e.target.value)} placeholder="Ex.: ação em evento local" className="mt-2 w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white" />
+              </label>}
+            </div>
             <div>
               <label className="block text-sm font-medium text-slate-300 mb-1.5">Nome do cliente</label>
               <input
