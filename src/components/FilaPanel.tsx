@@ -1,3 +1,4 @@
+import { firstName, attendanceTrace } from '@/lib/reception/intake';
 import { Bell, CircleCheck as CheckCircle2, Eye, ArrowLeftRight, Clock, TriangleAlert as AlertTriangle, UserCheck, History, Chrome as Home, Repeat, Sun, Moon } from 'lucide-react';
 import { supabase, type Broker, type QueueEntry, type Agency } from '@/lib/supabase';
 import { markMeritReturns, concludeAttendance, isLateForSort, interleaveQueue, reverseInterleaveQueue, nextBrokerFromInverseQueue, nextBrokerForGeneralQueue, nextBrokerByArrival, nextBrokerFromInverseTop, moveBrokerToEndOfDirectQueue, moveBrokerToEndOfInverseQueue, dispatchBroker, isArrivalOrderMode, nextBrokerByArrivalAnyAgency, nextBrokerByArrivalInverse, ATENDIMENTO_MANHA_START, markBrokerInService, markStandardBrokerInService } from '@/lib/queueEngine';
@@ -179,7 +180,7 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
             <div className="bg-amber-500/20 p-3 rounded-xl"><Bell className="h-6 w-6 text-amber-400" /></div>
             <div>
               <p className="text-xs uppercase tracking-wide text-slate-400">Próximo da Fila Geral {isPreSorteio && '· Ordem de Chegada'}</p>
-              <p className="text-xl font-bold text-white">{nextEntry.visit?.customer_name ?? '—'}</p>
+              <p className="text-xl font-bold text-white">{firstName(nextEntry.visit?.customer_name)}</p>
               <p className="text-sm text-slate-400">{nextEntry.agency} · {nextEntry.visit?.visit_reason}</p>
             </div>
           </div>
@@ -195,7 +196,7 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
             <div className="bg-orange-500/20 p-3 rounded-xl"><Home className="h-6 w-6 text-orange-400" /></div>
             <div>
               <p className="text-xs uppercase tracking-wide text-slate-400">Visita ao Decorado — Fila Inversa</p>
-              <p className="text-xl font-bold text-white">{nextDecorado.visit?.customer_name ?? '—'}</p>
+              <p className="text-xl font-bold text-white">{firstName(nextDecorado.visit?.customer_name)}</p>
               <p className="text-sm text-slate-400">Será chamado o primeiro corretor da fila inversa</p>
             </div>
           </div>
@@ -211,7 +212,7 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
             <div className="bg-sky-500/20 p-3 rounded-xl"><ArrowLeftRight className="h-6 w-6 text-sky-400" /></div>
             <div>
               <p className="text-xs uppercase tracking-wide text-slate-400">Parceria — Gerente de Parcerias</p>
-              <p className="text-xl font-bold text-white">{nextParceria.visit?.customer_name ?? '—'}</p>
+              <p className="text-xl font-bold text-white">{firstName(nextParceria.visit?.customer_name)}</p>
               <p className="text-sm text-slate-400">Não consome vez da fila geral</p>
             </div>
           </div>
@@ -228,7 +229,7 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
             const late = broker ? isLateForSort(broker.arrived_at, broker.shift ?? currentShift) : false;
             const queueLabel = entry.queue_type === 'decorado' ? 'Decorado' : entry.queue_type === 'parceria' ? 'Parceria' : 'Geral';
             return (
-              <QueueRow key={entry.id} entry={entry} brokerName={broker?.operational_name} late={late} queueLabel={queueLabel}>
+              <QueueRow brokers={brokers} key={entry.id} entry={entry} brokerName={broker?.operational_name} late={late} queueLabel={queueLabel}>
                 <button onClick={() => confirmPresence(entry)} className="action-btn bg-sky-500 hover:bg-sky-400 text-slate-950"><UserCheck className="h-4 w-4" /> Confirmar presença</button>
                 <button onClick={() => markAbsent(entry)} className="action-btn bg-slate-700 hover:bg-slate-600 text-white"><AlertTriangle className="h-4 w-4" /> {entry.attempts >= 3 ? 'Ausente (3/3) — auto-rechamada' : 'Ausente'}</button>
                 <button onClick={() => cancelCall(entry)} className="action-btn bg-slate-800 hover:bg-slate-700 text-slate-400">Cancelar</button>
@@ -246,7 +247,7 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
             const broker = entry.broker_id ? brokers.find((b) => b.id === entry.broker_id) : undefined;
             const late = broker ? isLateForSort(broker.arrived_at, broker.shift ?? currentShift) : false;
             return (
-              <QueueRow key={entry.id} entry={entry} position={i + 1} brokerName={broker?.operational_name} late={late}>
+              <QueueRow brokers={brokers} key={entry.id} entry={entry} position={i + 1} brokerName={broker?.operational_name} late={late}>
                 <button onClick={() => callNext(entry)} className="action-btn bg-amber-500 hover:bg-amber-400 text-slate-950"><Bell className="h-4 w-4" /> Chamar</button>
               </QueueRow>
             );
@@ -259,7 +260,7 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
           {inAttendance.map((entry) => {
             const broker = entry.broker_id ? brokers.find((b) => b.id === entry.broker_id) : undefined;
             return (
-              <QueueRow key={entry.id} entry={entry} brokerName={broker?.operational_name}>
+              <QueueRow brokers={brokers} key={entry.id} entry={entry} brokerName={broker?.operational_name}>
                 <button onClick={() => conclude(entry)} className="action-btn bg-emerald-500 hover:bg-emerald-400 text-slate-950"><CheckCircle2 className="h-4 w-4" /> Concluir</button>
               </QueueRow>
             );
@@ -270,7 +271,7 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
       {done.length > 0 && (
         <Section title="Concluídos" icon={<CheckCircle2 className="h-5 w-5 text-emerald-400" />} count={done.length}>
           {done.slice().reverse().map((entry) => (
-            <QueueRow key={entry.id} entry={entry} brokerName={brokers.find((b) => b.id === entry.broker_id)?.operational_name} />
+            <QueueRow brokers={brokers} key={entry.id} entry={entry} brokerName={brokers.find((b) => b.id === entry.broker_id)?.operational_name} />
           ))}
         </Section>
       )}
@@ -282,7 +283,7 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
           reverseWaiting.map((entry, i) => {
             const broker = entry.broker_id ? brokers.find((b) => b.id === entry.broker_id) : undefined;
             return (
-              <QueueRow key={entry.id} entry={entry} position={i + 1} brokerName={broker?.operational_name} queueLabel="Inversa" />
+              <QueueRow brokers={brokers} key={entry.id} entry={entry} position={i + 1} brokerName={broker?.operational_name} queueLabel="Inversa" />
             );
           })
         )}
@@ -308,14 +309,15 @@ function Section({ title, icon, count, children }: { title: string; icon: React.
   );
 }
 
-function QueueRow({ entry, position, brokerName, late, queueLabel, children }: {
-  entry: QueueEntry; position?: number; brokerName?: string; late?: boolean; queueLabel?: string; children?: React.ReactNode;
+function QueueRow({ brokers, entry, position, brokerName, late, queueLabel, children }: {
+  brokers: Broker[]; entry: QueueEntry; position?: number; brokerName?: string; late?: boolean; queueLabel?: string; children?: React.ReactNode;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-3 bg-slate-800/50 rounded-xl p-3 border border-slate-700/30">
       {position !== undefined && <span className="text-slate-500 font-mono text-sm w-6 text-center">{position}</span>}
       <div className="flex-1 min-w-[160px]">
-        <span className="text-white text-sm font-medium block">{entry.visit?.customer_name ?? '—'}</span>
+        <span className="text-white text-sm font-medium block">{firstName(entry.visit?.customer_name)}</span>
+        <p className="text-xs text-slate-300">{attendanceTrace(entry, brokers)}</p>
         <div className="flex items-center gap-2 text-xs mt-0.5">
           <span className={entry.agency === 'Viva Imóveis' ? 'text-amber-400' : entry.agency === 'Casa Nobre' ? 'text-sky-400' : 'text-slate-400'}>{entry.agency}</span>
           <span className="text-slate-500">·</span>

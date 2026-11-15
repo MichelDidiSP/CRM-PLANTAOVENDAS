@@ -77,7 +77,7 @@ export type Broker = {
 export type Visit = {
   id: string;
   customer_name: string;
-  phone: string;
+  phone: string | null;
   visit_reason: VisitReason;
   referred_broker_id: string | null;
   status: 'aguardando' | 'aguardando_chamada' | 'em_atendimento' | 'encerrado' | 'recusado';
