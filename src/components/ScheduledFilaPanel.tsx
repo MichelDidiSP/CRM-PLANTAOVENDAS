@@ -21,7 +21,7 @@ export default function ScheduledFilaPanel(props: {
       if (scheduleAt(clock).preOpening && visit?.pre_opening_assignee)
         return {
           ...entry,
-          visit: { ...visit, referred_broker_id: visit.pre_opening_assignee },
+          visit: { ...visit, original_referred_broker_id: visit.referred_broker_id, referred_broker_id: visit.pre_opening_assignee },
         };
       return entry;
     });

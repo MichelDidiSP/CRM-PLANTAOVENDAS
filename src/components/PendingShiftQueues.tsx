@@ -3,14 +3,16 @@ import type { ShiftDraw } from "@/lib/queue/shiftSchedule";
 export default function PendingShiftQueues({
   draw,
   brokers,
+  title = "Tarde — ativação às 14:00:01",
 }: {
   draw: ShiftDraw;
   brokers: Broker[];
+  title?: string;
 }) {
   return (
     <section className="mb-6">
       <h2 className="text-lg text-indigo-300 mb-3">
-        Tarde — ativação às 14:00:01
+        {title}
       </h2>
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {[

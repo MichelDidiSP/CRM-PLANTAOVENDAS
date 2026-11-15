@@ -1,28 +1,15 @@
+import { normalizePhone, maskPhone, firstName, lookupReturn, intakeRoute, recentVisits, attendanceTrace } from '@/lib/reception/intake';
 import { onlyOwn } from '@/lib/queue/pauseAndPartners';
 import { scheduleAt, preOpeningChoice } from '@/lib/queue/shiftSchedule';
-import { useState, useRef, useMemo } from 'react';
+import { useState, useRef, useMemo, useEffect } from 'react';
 import { UserPlus, Phone, TriangleAlert as AlertTriangle, CircleCheck as CheckCircle2, Clock, Search, EyeOff, Eye, Zap, UserCheck, UserX, Building2, Trash2, X } from 'lucide-react';
-import { supabase, type Broker, type Visit, type VisitReason, type Agency } from '@/lib/supabase';
+import { supabase, type Broker, type Visit, type VisitReason, type Agency, type QueueEntry } from '@/lib/supabase';
 import {
   REASONS,
-  QUICK_REASONS,
-  sanitizePhone,
-  formatPhoneDisplay,
-  lastBrokerFromAgency,
-  lastBrokerFromTeam,
-  nextBrokerByArrival,
-  nextBrokerFromInverseTop,
-  nextBrokerByArrivalAnyAgency,
-  nextBrokerByArrivalInverse,
-  nextBrokerForGeneralQueue,
-  distributeIndicacao,
   markBrokerInService,
   markStandardBrokerInService,
-  resolveApenasImobiliariaBroker,
   dispatchBroker,
   isArrivalOrderDispatchActive,
-  isAfternoonInscriptionWindow,
-  isLateCheckIn,
 } from '@/lib/queueEngine';
 import { useSim } from '@/lib/simContext';
 
@@ -31,16 +18,29 @@ type QuickReason = VisitReason;
 type Props = {
   brokers: Broker[];
   visits: Visit[];
+  queue: QueueEntry[];
 };
 
-export default function RecepcaoPanel({ brokers, visits }: Props) {
+export default function RecepcaoPanel({ brokers, visits, queue }: Props) {
   const [customerName, setCustomerName] = useState('');
   const [phone, setPhone] = useState('');
+  const [noPhone, setNoPhone] = useState(false);
+  const [returnMatch, setReturnMatch] = useState<Awaited<ReturnType<typeof lookupReturn>>>(null);
+  const submitLock = useRef(false);
+  useEffect(() => {
+    let active = true;
+    setReturnMatch(null);
+    lookupReturn(noPhone ? '' : phone).then(match => {
+      if (!active) return;
+      setReturnMatch(match);
+      if (match) { setReason('Retorno'); setReferredBrokerId(match.ownerId); }
+    }).catch(() => { if (active) setMessage({ type: 'error', text: 'Não foi possível verificar o retorno. Tente novamente.' }); });
+    return () => { active = false; };
+  }, [phone, noPhone]);
   const [reason, setReason] = useState<VisitReason>('Primeira visita');
   const [referredBrokerId, setReferredBrokerId] = useState<string>('');
   const [message, setMessage] = useState<{ type: 'success' | 'error' | 'warning' | 'info'; text: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [searchPhone, setSearchPhone] = useState('');
   const [revealed, setRevealed] = useState(false);
   const { currentShift, simSeconds, getCurrentTime, isHoliday, setIsHoliday, isExtendedShift, plantaoDate } = useSim();
 
@@ -84,10 +84,6 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
   const allInternalBrokers = brokers.filter(
     (b) => !b.is_external_partner,
   );
-  const afternoonCheckedIn = brokers.filter(
-    (b) => !b.is_external_partner && b.agency !== 'Externo' && b.presence_status === 'presente' && b.shift === 'tarde',
-  );
-
   // Predictive search results — scans ALL internal brokers (present + absent + external team)
   const searchResults = useMemo(() => {
     if (!brokerSearch.trim() || brokerSearch.trim().length < 2) return [];
@@ -97,9 +93,6 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
       .slice(0, 8);
   }, [brokerSearch, allInternalBrokers]);
 
-  const normalizedPhone = sanitizePhone(phone);
-  const duplicate = visits.find((v) => v.phone === normalizedPhone && v.status !== 'encerrado' && normalizedPhone.length > 0);
-
   const isParceria = reason === 'Parceria';
   const isDecorado = reason === 'Visita ao Decorado';
   const isIndicacaoForm = reason === 'Indicação';
@@ -107,9 +100,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
 
   const partnerBrokers = brokers.filter((b) => b.is_external_partner);
 
-  const filteredVisits = searchPhone
-    ? visits.filter((v) => v.phone.includes(sanitizePhone(searchPhone)))
-    : visits;
+  const filteredVisits = recentVisits(visits);
 
   function handleReasonChange(newReason: VisitReason) {
     setReason(newReason);
@@ -156,80 +147,32 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (submitLock.current) return;
     setMessage(null);
-
-    if (!customerName.trim() || normalizedPhone.length < 10) {
-      setMessage({ type: 'error', text: 'Preencha o nome e um telefone válido com DDD.' });
-      return;
-    }
-
-    if (duplicate) {
-      setMessage({
-        type: 'warning',
-        text: `Cliente já cadastrado: ${duplicate.customer_name} — ${formatPhoneDisplay(duplicate.phone)} (${duplicate.visit_reason}).`,
-      });
-      return;
-    }
-
+    if (!customerName.trim()) { setMessage({ type: 'error', text: 'Informe o nome do cliente.' }); return; }
     if (!scheduleAt({ seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate }).acceptingClients) { setMessage({ type: 'warning', text: 'Entrada de novos clientes encerrada.' }); return; }
-    const preOpeningAssignee = choosePreOpeningBroker(referredBrokerId || null);
+    submitLock.current = true;
     setSubmitting(true);
-
-    const simTimestamp = getCurrentTime().toISOString();
-    const queueType = isParceria ? 'parceria' : isDecorado ? 'decorado' : 'geral';
-
-    const entryAgency: Agency = isParceria ? 'Externo' : 'Viva Imóveis';
-
-    const { data: visitData, error: visitError } = await supabase
-      .from('visits')
-      .insert({
-        customer_name: customerName.trim(),
-        phone: normalizedPhone,
-        visit_reason: reason,
-        referred_broker_id: referredBrokerId || null,
-        pre_opening_assignee: preOpeningAssignee,
-        status: 'aguardando',
-        created_at: simTimestamp,
-      })
-      .select()
-      .single();
-
-    if (visitError || !visitData) {
-      setMessage({ type: 'error', text: 'Erro ao cadastrar visita. Tente novamente.' });
-      setSubmitting(false);
-      return;
-    }
-
-    const { error: queueError } = await supabase.from('queue_entries').insert({
-      visit_id: visitData.id,
-      agency: entryAgency,
-      queue_status: 'aguardando',
-      attempts: 0,
-      queue_type: queueType,
-      shift: currentShift,
-      created_at: simTimestamp,
-    });
-
-    if (queueError) {
-      setMessage({ type: 'error', text: 'Visita criada, mas erro ao entrar na fila.' });
-    } else {
-      const successMsg = isParceria
-        ? `${customerName.trim()} foi cadastrado como Parceria e será direcionado ao Gerente de Parcerias.`
-        : isDecorado
-        ? `${customerName.trim()} foi cadastrado para Visita ao Decorado. O sistema chamará o próximo corretor da Fila Inversa.`
-        : `${customerName.trim()} foi cadastrado e entrou na fila. A imobiliária e o corretor serão definidos pelo sistema.`;
-
-      setMessage({ type: 'success', text: successMsg });
-      setRevealed(true);
-      setCustomerName('');
-      setPhone('');
-      setReferredBrokerId('');
-      setBrokerSearch('');
-      setSelectedBroker(null);
-      setManualBrokerName('');
-      setManualBrokerEquipe('');
-    }
-    setSubmitting(false);
+    let createdId: string | null = null;
+    try {
+      const previous = await lookupReturn(noPhone ? '' : phone);
+      const route = intakeRoute(phone, noPhone, reason, referredBrokerId || null, previous);
+      if (['Indicação', 'Retorno'].includes(route.visit_reason) && !route.referred_broker_id) throw new Error('Selecione o corretor original.');
+      const preOpeningAssignee = choosePreOpeningBroker(route.referred_broker_id);
+      const timestamp = getCurrentTime().toISOString();
+      const { queue_type, ...visit } = route;
+      const result = await supabase.from('visits').insert({ ...visit, customer_name: customerName.trim(), pre_opening_assignee: preOpeningAssignee, status: 'aguardando', created_at: timestamp }).select().single();
+      if (result.error || !result.data) throw result.error || new Error('Não foi possível cadastrar a visita.');
+      createdId = result.data.id;
+      const queued = await supabase.from('queue_entries').insert({ visit_id: createdId, agency: brokers.find(b => b.id === route.referred_broker_id)?.agency ?? 'Viva Imóveis', queue_status: 'aguardando', attempts: 0, queue_type, shift: currentShift, created_at: timestamp });
+      if (queued.error) throw queued.error;
+      createdId = null;
+      setMessage({ type: 'success', text: `${firstName(customerName)} entrou na fila como ${route.visit_reason}.` });
+      setCustomerName(''); setPhone(''); setNoPhone(false); setReason('Primeira visita'); setReferredBrokerId(''); setSelectedBroker(null); setBrokerSearch(''); setReturnMatch(null);
+    } catch (error) {
+      if (createdId) await supabase.from('visits').delete().eq('id', createdId);
+      setMessage({ type: 'error', text: error instanceof Error ? error.message : 'Não foi possível concluir o cadastro. Tente novamente.' });
+    } finally { submitLock.current = false; setSubmitting(false); }
   }
 
   async function handleQuickEntry() {
@@ -358,37 +301,6 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
             <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition ${isHoliday ? 'translate-x-5' : 'translate-x-0.5'}`} />
           </button>
         </div>
-        {currentShift === 'tarde' && !isExtendedShift && (
-          <div className="bg-slate-900 rounded-2xl border border-indigo-500/30 p-5 mb-4">
-            <div className="flex items-center justify-between gap-3 mb-3">
-              <div>
-                <h2 className="text-lg font-bold text-indigo-300">Inscrição do Turno da Tarde</h2>
-                <p className="text-sm text-slate-400">
-                  {isAfternoonInscriptionWindow(simSeconds) ? 'Inscrições abertas até 13:45:59' : 'Inscrições encerradas — sorteio às 13:46h'}
-                </p>
-              </div>
-              <span className="text-2xl font-bold tabular-nums text-indigo-300">{afternoonCheckedIn.length}</span>
-            </div>
-            {afternoonCheckedIn.length === 0 ? (
-              <p className="text-sm text-amber-400 bg-amber-500/10 rounded-lg p-3">
-                Nenhum corretor fez check-in para a tarde. O sorteio fica suspenso até haver corretores presentes.
-              </p>
-            ) : (
-              <ul className="space-y-2 max-h-[200px] overflow-y-auto">
-                {afternoonCheckedIn.map((b) => (
-                  <li key={b.id} className="flex items-center justify-between text-sm bg-slate-800/60 rounded-lg px-3 py-2">
-                    <span className="text-white">{b.operational_name}</span>
-                    <span className="flex items-center gap-2 text-xs text-slate-400">
-                      {b.arrived_at && new Date(b.arrived_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                      {isLateCheckIn(b) && <span className="px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-400">Atrasado</span>}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
-
         {/* Simular Entrada Rápida */}
         <div className="bg-gradient-to-r from-amber-500/10 to-orange-500/10 rounded-2xl border border-amber-500/30 p-5 mb-4">
           <div className="flex items-center gap-3 mb-4">
@@ -545,38 +457,35 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
 
             <div>
               <label className="block text-sm font-medium text-slate-300 mb-1.5">
-                Telefone com DDD <span className="text-amber-400">*</span>
-                <span className="ml-2 text-xs text-slate-500">chave anti-duplicidade (apenas números)</span>
+                Telefone com DDD
+                <span className="ml-2 text-xs text-slate-500">identificação automática de retorno</span>
               </label>
               <div className="relative">
                 <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-500" />
                 <input
                   type="tel"
                   value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  placeholder="Digite o telefone livremente (ex: 11912345678)"
+                  onChange={(e) => { setPhone(maskPhone(e.target.value)); setReason('Primeira visita'); setReferredBrokerId(''); }}
+                  disabled={noPhone}
+                  placeholder="(XX) XXXXX-XXXX"
                   className={`w-full bg-slate-800 border rounded-xl pl-10 pr-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 transition ${
-                    duplicate
+                    returnMatch
                       ? 'border-red-500/50 focus:ring-red-500'
                       : 'border-slate-700 focus:ring-amber-500'
                   }`}
                 />
               </div>
-              {duplicate && (
-                <div className="mt-2 flex items-start gap-2 text-sm text-red-400 bg-red-500/10 rounded-lg p-3">
-                  <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
-                  <span>
-                    Duplicidade detectada: <strong>{duplicate.customer_name}</strong> já está no plantão
-                    ({duplicate.visit_reason}).
-                  </span>
-                </div>
-              )}
+              <label className="flex gap-2 mt-2 text-sm"><input type="checkbox" checked={noPhone} onChange={e => { setNoPhone(e.target.checked); setPhone(''); setReason('Visita ao Decorado'); setReferredBrokerId(''); }} />Cliente não forneceu telefone</label>
+              {(!normalizePhone(phone) || noPhone) && <p className="text-sm text-amber-300">Sem telefone: atendimento obrigatório pela Fila Inversa (Visita ao Decorado).</p>}
+              {returnMatch && <p className="text-sm text-emerald-300">Retorno identificado. Corretor original: {brokers.find(b => b.id === returnMatch.ownerId)?.operational_name ?? 'vinculado ao cadastro anterior'}.</p>}
+
             </div>
 
             <div>
               <label className="block text-sm font-medium text-slate-300 mb-1.5">Motivo da visita</label>
               <select
-                value={reason}
+                value={noPhone || !normalizePhone(phone) ? 'Visita ao Decorado' : reason}
+                disabled={noPhone || !normalizePhone(phone) || !!returnMatch}
                 onChange={(e) => handleReasonChange(e.target.value as VisitReason)}
                 className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-amber-500 transition"
               >
@@ -792,14 +701,15 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
 
             {reason === 'Retorno' && !isParceria && !isDecorado && (
               <div>
-                <label className="block text-sm font-medium text-slate-300 mb-1.5">Corretor indicante (opcional)</label>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">Corretor original</label>
                 <select
                   value={referredBrokerId}
+                  disabled={!!returnMatch}
                   onChange={(e) => setReferredBrokerId(e.target.value)}
                   className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-amber-500 transition"
                 >
-                  <option value="">Sem corretor específico</option>
-                  {presentBrokers.map((b) => (
+                  <option value="">Selecione o corretor original</option>
+                  {allInternalBrokers.map((b) => (
                     <option key={b.id} value={b.id}>{b.operational_name} ({b.agency} · {b.equipe})</option>
                   ))}
                 </select>
@@ -843,7 +753,7 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
 
             <button
               type="submit"
-              disabled={submitting || !!duplicate}
+              disabled={submitting}
               className="w-full bg-amber-500 hover:bg-amber-400 disabled:bg-slate-700 disabled:text-slate-500 text-slate-950 font-bold py-3.5 rounded-xl transition-all flex items-center justify-center gap-2"
             >
               <UserPlus className="h-5 w-5" />
@@ -857,38 +767,23 @@ export default function RecepcaoPanel({ brokers, visits }: Props) {
         <div className="bg-slate-900 rounded-2xl border border-slate-800 p-6 h-full">
           <h2 className="text-lg font-bold mb-4">Visitas recentes</h2>
 
-          <div className="relative mb-4">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
-            <input
-              type="text"
-              value={searchPhone}
-              onChange={(e) => setSearchPhone(e.target.value)}
-              placeholder="Buscar por telefone…"
-              className="w-full bg-slate-800 border border-slate-700 rounded-xl pl-10 pr-4 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-amber-500"
-            />
-          </div>
-
           <div className="space-y-2 max-h-[500px] overflow-y-auto">
             {filteredVisits.length === 0 ? (
               <p className="text-sm text-slate-500 text-center py-8">Nenhuma visita registrada.</p>
             ) : (
-              filteredVisits.slice().reverse().map((v) => (
+              filteredVisits.map((v) => (
                 <div key={v.id} className="bg-slate-800/60 rounded-xl p-3 border border-slate-700/50">
                   <div className="flex items-center justify-between mb-1">
-                    <span className="font-medium text-white text-sm">{v.customer_name}</span>
+                    <span className="font-medium text-white text-sm">{firstName(v.customer_name)}</span>
                     <StatusBadge status={v.status} />
                   </div>
                   <div className="flex items-center gap-3 text-xs text-slate-400">
-                    <span className="flex items-center gap-1">
-                      <Phone className="h-3 w-3" />
-                      {formatPhoneDisplay(v.phone)}
-                    </span>
                     <span className="flex items-center gap-1">
                       <Clock className="h-3 w-3" />
                       {new Date(v.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
                     </span>
                   </div>
-                  <div className="mt-1.5 text-xs text-amber-400/80">{v.visit_reason}</div>
+                  <div className="mt-1.5 text-xs text-amber-400/80">{v.visit_reason}</div><p className="text-xs text-slate-300 mt-2">{attendanceTrace(queue.filter(e => e.visit_id === v.id).sort((a,b) => b.created_at.localeCompare(a.created_at))[0], brokers)}</p>
                 </div>
               ))
             )}

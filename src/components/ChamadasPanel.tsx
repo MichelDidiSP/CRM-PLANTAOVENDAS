@@ -1,3 +1,4 @@
+import { firstName, attendanceTrace } from '@/lib/reception/intake';
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { Volume2, VolumeX, Timer, Users, Building2, Zap, Chrome as Home, ArrowLeftRight, TriangleAlert as AlertTriangle, History } from 'lucide-react';
 import { supabase, type Broker, type QueueEntry, type Agency } from '@/lib/supabase';
@@ -355,7 +356,7 @@ export default function ChamadasPanel({ queue, brokers }: Props) {
             {nextEntries.map((entry, i) => (
               <div key={entry.id} className="flex items-center gap-3 bg-slate-800/50 rounded-xl p-3">
                 <span className="text-slate-500 font-mono text-sm w-6">{i + 1}.</span>
-                <span className="text-white text-sm flex-1">{entry.visit?.customer_name ?? '—'}</span>
+                <span className="text-white text-sm flex-1">{firstName(entry.visit?.customer_name)}</span>
                 <span className={`text-xs px-2 py-0.5 rounded-full ${entry.agency === 'Viva Imóveis' ? 'bg-amber-500/15 text-amber-400' : 'bg-sky-500/15 text-sky-400'}`}>
                   {entry.agency}
                 </span>
@@ -380,7 +381,7 @@ export default function ChamadasPanel({ queue, brokers }: Props) {
               const callTime = entry.called_at ? new Date(entry.called_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—';
               return (
                 <div key={entry.id} className="flex items-center gap-3 bg-slate-800/50 rounded-xl p-3">
-                  <span className="text-white text-sm font-medium flex-1">{histBroker?.operational_name ?? '—'}</span>
+                  <span className="text-white text-sm font-medium flex-1">{firstName(entry.visit?.customer_name)} · {attendanceTrace(entry, brokers)}</span>
                   <span className={`text-xs px-2 py-0.5 rounded-full ${entry.queue_type === 'decorado' ? 'bg-orange-500/15 text-orange-400' : entry.queue_type === 'parceria' ? 'bg-sky-500/15 text-sky-400' : 'bg-amber-500/15 text-amber-400'}`}>{reasonLabel}</span>
                   <span className="text-xs text-slate-400 font-mono">{callTime}</span>
                 </div>

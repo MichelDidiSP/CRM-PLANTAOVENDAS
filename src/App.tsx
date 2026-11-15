@@ -21,6 +21,8 @@ type View = 'recepcao' | 'chamadas' | 'corretor' | 'fila' | 'auditoria';
 function AppContent() {
   const { clockDisplay, setStartTime, addMinute, jumpToAfternoon, testMode, setTestMode, sorteioTriggered, resetClock, simSeconds, currentShift, isWeekday, plantaoDate, setPlantaoDate, isPreSorteio, isCheckinOpen, isAtendimentoActive, isShiftTransition, isAfternoonActive, isMorningQueueActive, isExtendedShift, getCurrentTime } = useSim();
   const schedule = scheduleAt({ seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate });
+  const [morningDraw, setMorningDraw] = useState<ShiftDraw | null>(null);
+  const [afternoonDraw, setAfternoonDraw] = useState<ShiftDraw | null>(null);
   const [pendingDraw, setPendingDraw] = useState<ShiftDraw | null>(null);
   const scheduleRunning = useRef(false);
   const [view, setView] = useState<View>('recepcao');
@@ -51,8 +53,12 @@ function AppContent() {
     setVisits(data.visits);
     setQueue(data.queue);
     setActiveSession(data.activeSession);
+    const draws = await supabase.from('plantao_sessions').select('*').eq('plantao_date', plantaoDate);
+    if (draws.error) { setLoadError('Não foi possível carregar os sorteios.'); setLoading(false); return; }
+    setMorningDraw(draws.data?.find((e: { id: string }) => e.id === `schedule_${plantaoDate}_morning`)?.schedule_data ?? null);
+    setAfternoonDraw(draws.data?.find((e: { id: string }) => e.id === `schedule_${plantaoDate}_afternoon`)?.schedule_data ?? null);
     setLoading(false);
-  }, []);
+  }, [plantaoDate]);
 
   useEffect(() => {
     let mounted = true;
@@ -263,8 +269,11 @@ function AppContent() {
       <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 py-6">
         {loadError && <p role="alert" className="text-red-400 mb-4">{loadError}</p>}
         {view === 'auditoria' && <PauseAuditPanel brokers={brokers} />}
-        {view === 'auditoria' && pendingDraw && <PendingShiftQueues draw={pendingDraw} brokers={brokers} />}
-        {view === 'recepcao' && <><ExternalPartnerPanel /><RecepcaoPanel brokers={brokers} visits={visits} /></>}
+        {(schedule.afternoonActive ? afternoonDraw : morningDraw) && <p className="mb-4 text-lg text-amber-300">Ordem do Sorteio: 1ª {(schedule.afternoonActive ? afternoonDraw : morningDraw)!.firstAgency} | 2ª {(schedule.afternoonActive ? afternoonDraw : morningDraw)!.firstAgency === 'Viva Imóveis' ? 'Casa Nobre' : 'Viva Imóveis'}</p>}
+        {morningDraw && schedule.preOpening && <PendingShiftQueues draw={morningDraw} brokers={brokers} title="Sorteio da manhã — ativação às 09:00. Ordem de chegada continua ativa." />}
+        {pendingDraw && <><p className="mb-3 text-indigo-300">Ordem do Sorteio da Tarde: 1ª {pendingDraw.firstAgency} | 2ª {pendingDraw.firstAgency === 'Viva Imóveis' ? 'Casa Nobre' : 'Viva Imóveis'}</p><PendingShiftQueues draw={pendingDraw} brokers={brokers} title="Sorteio da tarde — ativação às 14:00:01. Filas da manhã continuam ativas." /></>}
+        {view === 'auditoria' && <section className="mb-6 grid md:grid-cols-2 gap-4">{(['manha', 'tarde'] as const).filter(shift => !isExtendedShift || shift === 'manha').map(shift => <div key={shift}><h2 className="font-bold">Inscritos — {shift === 'manha' ? 'Manhã / Integral' : 'Tarde'}</h2><ul>{brokers.filter(b => !b.is_external_partner && (shift === 'manha' ? (morningDraw && [...morningDraw.viva, ...morningDraw.nobre].includes(b.id)) || b.shift === 'manha' && b.arrived_at?.startsWith(plantaoDate) : (b as Broker & { afternoon_enrolled_at?: string }).afternoon_enrolled_at?.startsWith(plantaoDate) || b.shift === 'tarde' && b.arrived_at)).map(b => <li key={b.id}>{b.operational_name} · {b.agency}</li>)}</ul></div>)}</section>}
+        {view === 'recepcao' && <><ExternalPartnerPanel /><RecepcaoPanel brokers={brokers} visits={visits} queue={queue} /></>}
         {view === 'chamadas' && <><ExternalPartnerPanel callsOnly /><ChamadasPanel queue={queue} brokers={brokers} /></>}
         {view === 'corretor' && <><CorretorPanel brokers={brokers} /><ExternalPartnerPanel managementOnly /></>}
         {view === 'fila' && <FilaPanel queue={sortedQueue} brokers={brokers} allQueue={queue} />}
