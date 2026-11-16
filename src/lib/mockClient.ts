@@ -73,6 +73,7 @@ function createSeedData(): Record<string, Row[]> {
     relatorio_fechamento: [],
     pause_audit: [],
     external_partner_intakes: [],
+    partner_reception_details: [],
     external_partner_reservations: [],
   };
 }

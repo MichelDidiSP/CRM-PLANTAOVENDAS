@@ -10,7 +10,14 @@ SELECT public.record_incorporadora_direct_lead(
   '{"customer_name":"Cliente da incorporadora","phone":"(11) 91234-5678","visit_reason":"Primeira visita",
     "media_channel":"Google / Pesquisa","created_at":"2040-01-20T10:00:00-03:00","shift":"manha"}'
 );
-DO $$
+SELECT public.record_partner_reception(
+  '{"id":"50000000-0000-0000-0000-000000000001","partner_name":"Externo","company":"Parceira","creci":"12345",
+    "client_first_name":"Cliente","arrival":"accompanied","manager_target":"partnerships","created_at":"2040-01-20T09:00:00-03:00"}',
+  '{"customer_name":"Cliente da parceria","phone":"11956567890","media_channel":"Google / Pesquisa"}'
+);
+UPDATE public.external_partner_intakes SET manager_status = 'acknowledged'
+  WHERE id = '50000000-0000-0000-0000-000000000001';
+DO $
 BEGIN
   IF has_schema_privilege(current_user, 'crm_private', 'USAGE') OR
     has_function_privilege(current_user, 'public.close_plantao_day(date)', 'EXECUTE') THEN
@@ -60,8 +67,8 @@ DO $$
 DECLARE summary jsonb;
 BEGIN
   summary := public.close_plantao_day('2040-01-20');
-  IF summary::text ~ '11912345678|11987654321' OR jsonb_array_length(summary->'recipients') <> 1
-    OR (SELECT sum((r->>'count')::integer) FROM jsonb_array_elements(summary->'rows') r) <> 2 THEN
+  IF summary::text ~ '11912345678|11987654321|11956567890' OR jsonb_array_length(summary->'recipients') <> 1
+    OR (SELECT sum((r->>'count')::integer) FROM jsonb_array_elements(summary->'rows') r) <> 3 THEN
     RAISE EXCEPTION 'Resumo incorreto ou contém dados pessoais: %', summary;
   END IF;
   IF NOT public.is_plantao_closed('2040-01-20') OR public.close_plantao_day('2040-01-20') <> summary THEN
@@ -83,6 +90,10 @@ BEGIN
     NOT EXISTS (SELECT 1 FROM crm_private.plantao_daily_closures
       WHERE customers @> '[{"name":"Cliente atendido","phone":"11987654321","broker":"Efetivo","commission_split":true}]') THEN
     RAISE EXCEPTION 'Cadastro nominal não foi preservado.';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM crm_private.plantao_daily_closures
+    WHERE customers @> '[{"name":"Cliente da parceria","phone":"11956567890","media":"Google / Pesquisa","broker":"Externo"}]') THEN
+    RAISE EXCEPTION 'Cadastro de parceria não foi preservado.';
   END IF;
 END $$;
 ROLLBACK;

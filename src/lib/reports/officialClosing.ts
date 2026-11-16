@@ -51,12 +51,13 @@ export async function closePlantao(date: string): Promise<ClosingSummary> {
   }
   const saved = await supabase.from('plantao_daily_closures').select('*').eq('date', date).maybeSingle();
   if (saved.data) return saved.data as ClosingSummary;
-  const [facts, queue, direct, partners, reservations] = await Promise.all([
+  const [facts, queue, direct, partners, reservations, partnerDetails] = await Promise.all([
     loadReportRows({ period: 'day', date, shift: 'manha' }),
     supabase.from('queue_entries').select('*, visit:visits(*), broker:brokers(*)'),
     supabase.from('incorporadora_direct_leads').select('*'),
     supabase.from('external_partner_intakes').select('*').eq('manager_status', 'acknowledged'),
     supabase.from('external_partner_reservations').select('*'),
+    supabase.from('partner_reception_details').select('*'),
   ]);
   for (const result of [queue, direct, partners, reservations]) {
     if (result.error) throw new Error(result.error.message);
@@ -73,8 +74,9 @@ export async function closePlantao(date: string): Promise<ClosingSummary> {
     })),
     ...(partners.data ?? []).filter(row => businessDate(row.created_at) === date).map(row => {
       const reservation = (reservations.data ?? []).find(item => item.intake_id === row.id);
-      return { name: reservation?.customer_full_name ?? row.client_first_name, phone: reservation?.customer_phone ?? null,
-        media: null, type: 'Parceria', broker: row.partner_name };
+      const intakeDetails = (partnerDetails.data ?? []).find(item => item.intake_id === row.id);
+      return { name: reservation?.customer_full_name ?? intakeDetails?.customer_name ?? row.client_first_name,
+        phone: reservation?.customer_phone ?? intakeDetails?.phone ?? null, media: intakeDetails?.media_channel ?? null, type: 'Parceria', broker: row.partner_name };
     }),
   ];
   const summary: ClosingSummary = { date, closed_at: new Date().toISOString(), rows: facts, recipients: [] };
