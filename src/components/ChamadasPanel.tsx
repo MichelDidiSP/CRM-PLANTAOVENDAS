@@ -3,6 +3,9 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import { Volume2, VolumeX, Timer, Users, Building2, Zap, Chrome as Home, ArrowLeftRight, TriangleAlert as AlertTriangle, History } from 'lucide-react';
 import { supabase, type Broker, type QueueEntry, type Agency } from '@/lib/supabase';
 import { formatTime, nextBrokerFromInverseTop, nextBrokerFromAgency, nextBrokerByArrival, markBrokerInService, markStandardBrokerInService } from '@/lib/queueEngine';
+import { busyReceptionIds, resolveReceptionDispatch } from '@/lib/reception/fallbackOrchestrator';
+import { claimReceptionCall } from '@/lib/reception/fallbackStore';
+import { dispatchBroker } from '@/lib/queueEngine';
 import { useSim } from '@/lib/simContext';
 
 type Props = {
@@ -11,7 +14,7 @@ type Props = {
 };
 
 export default function ChamadasPanel({ queue, brokers }: Props) {
-  const { callDuration, testMode } = useSim();
+  const { callDuration, testMode, simSeconds, plantaoDate, isExtendedShift } = useSim();
   const [currentCall, setCurrentCall] = useState<QueueEntry | null>(null);
   const [remaining, setRemaining] = useState(callDuration);
   const [attempts, setAttempts] = useState(0);
@@ -108,6 +111,20 @@ export default function ChamadasPanel({ queue, brokers }: Props) {
       if (!refreshedQueue) return;
 
       const entry = refreshedQueue as QueueEntry;
+      const reason = entry.visit?.visit_reason;
+      if (entry.reception_waiting || reason === 'Indicação' || reason === 'Retorno') {
+        const busy = busyReceptionIds(queue.filter(row => row.id !== entry.id));
+        const clock = { seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate };
+        const { broker, split } = resolveReceptionDispatch(entry, brokers, clock, busy, () =>
+          dispatchBroker(brokers, entry.reception_waiting ? 'geral' : entry.queue_type, simSeconds,
+            busy, null, entry.visit?.referred_broker_id ?? null).broker,
+        );
+        if (broker) {
+          try { await claimReceptionCall(entry, broker, split, new Date().toISOString()); }
+          catch { setAutoRecallNotice('Não foi possível chamar o corretor. Cliente permanece aguardando.'); }
+        }
+        return;
+      }
       let nextBrokerId: string | null = null;
 
       const busyIds = new Set(
@@ -150,7 +167,7 @@ export default function ChamadasPanel({ queue, brokers }: Props) {
         await markServed(nextBrokerId, new Date().toISOString());
       }
     }, 1500);
-  }, [currentCall, brokers, queue]);
+  }, [currentCall, brokers, queue, simSeconds, plantaoDate, isExtendedShift]);
 
   // When remaining hits 0, auto-trigger transbordo
   useEffect(() => {
@@ -183,7 +200,7 @@ export default function ChamadasPanel({ queue, brokers }: Props) {
     }
   }
 
-  const nextEntries = queue.filter((e) => e.queue_status === 'aguardando' && e.queue_type === 'geral').slice(0, 5);
+  const nextEntries = queue.filter((e) => e.queue_status === 'aguardando' && (e.queue_type === 'geral' || e.reception_waiting)).slice(0, 5);
   const totalWaiting = queue.filter((e) => e.queue_status === 'aguardando').length;
   const vivaWaiting = queue.filter((e) => e.queue_status === 'aguardando' && e.agency === 'Viva Imóveis').length;
   const nobreWaiting = queue.filter((e) => e.queue_status === 'aguardando' && e.agency === 'Casa Nobre').length;

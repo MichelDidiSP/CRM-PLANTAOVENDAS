@@ -7,11 +7,11 @@ import { UserPlus, Phone, TriangleAlert as AlertTriangle, CircleCheck as CheckCi
 import { supabase, type Broker, type Visit, type VisitReason, type Agency, type QueueEntry } from '@/lib/supabase';
 import {
   REASONS,
-  markBrokerInService,
-  markStandardBrokerInService,
   dispatchBroker,
   isArrivalOrderDispatchActive,
 } from '@/lib/queueEngine';
+import { busyReceptionIds, receptionDestination, receptionRoster, resolveReceptionDispatch, copyQuickPhone } from '@/lib/reception/fallbackOrchestrator';
+import { claimReceptionCall, saveDirectLead } from '@/lib/reception/fallbackStore';
 import { useSim } from '@/lib/simContext';
 
 type QuickReason = VisitReason;
@@ -20,9 +20,11 @@ type Props = {
   brokers: Broker[];
   visits: Visit[];
   queue: QueueEntry[];
+  allowTestControls: boolean;
+  testReset: number;
 };
 
-export default function RecepcaoPanel({ brokers, visits, queue }: Props) {
+export default function RecepcaoPanel({ brokers, visits, queue, allowTestControls, testReset }: Props) {
   const [customerName, setCustomerName] = useState('');
   const [mediaChannel, setMediaChannel] = useState('');
   const [mediaChannelDetail, setMediaChannelDetail] = useState('');
@@ -64,6 +66,9 @@ export default function RecepcaoPanel({ brokers, visits, queue }: Props) {
   const [quickReason, setQuickReason] = useState<QuickReason>('Primeira visita');
   const [quickBrokerId, setQuickBrokerId] = useState<string>('');
   const [quickSubmitting, setQuickSubmitting] = useState(false);
+  const [quickLog, setQuickLog] = useState<{ name: string; phone: string }[]>([]);
+  const [copyStatus, setCopyStatus] = useState('');
+  useEffect(() => { setQuickLog([]); setCopyStatus(''); }, [testReset]);
   const quickCounterRef = useRef<number>(
     (() => {
       try {
@@ -104,6 +109,9 @@ export default function RecepcaoPanel({ brokers, visits, queue }: Props) {
   const partnerBrokers = brokers.filter((b) => b.is_external_partner);
 
   const filteredVisits = recentVisits(visits);
+  const clock = { seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate };
+  const busyIds = busyReceptionIds(queue);
+  const roster = receptionRoster(brokers, clock);
 
   function handleReasonChange(newReason: VisitReason) {
     setReason(newReason);
@@ -160,17 +168,33 @@ export default function RecepcaoPanel({ brokers, visits, queue }: Props) {
     try {
       const previous = await lookupReturn(noPhone ? '' : phone);
       const route = intakeRoute(phone, noPhone, reason, referredBrokerId || null, previous);
-      if (['Indicação', 'Retorno'].includes(route.visit_reason) && !route.referred_broker_id) throw new Error('Selecione o corretor original.');
-      const preOpeningAssignee = choosePreOpeningBroker(route.referred_broker_id);
+      const destination = receptionDestination(roster, busyIds, route.referred_broker_id);
       const timestamp = getCurrentTime().toISOString();
-      const { queue_type, ...visit } = route;
-      const result = await supabase.from('visits').insert({ ...visit, ...mediaChannelFields(mediaChannel, mediaChannelDetail), customer_name: customerName.trim(), pre_opening_assignee: preOpeningAssignee, status: 'aguardando', created_at: timestamp }).select().single();
-      if (result.error || !result.data) throw result.error || new Error('Não foi possível cadastrar a visita.');
-      createdId = result.data.id;
-      const queued = await supabase.from('queue_entries').insert({ visit_id: createdId, agency: brokers.find(b => b.id === route.referred_broker_id)?.agency ?? 'Viva Imóveis', queue_status: 'aguardando', attempts: 0, queue_type, shift: currentShift, created_at: timestamp });
-      if (queued.error) throw queued.error;
-      createdId = null;
-      setMessage({ type: 'success', text: `${firstName(customerName)} entrou na fila como ${route.visit_reason}.` });
+      const media = mediaChannelFields(mediaChannel, mediaChannelDetail);
+      if (destination === 'direct') {
+        await saveDirectLead({ ...media, customer_name: customerName.trim(), phone: route.phone,
+          visit_reason: route.visit_reason, created_at: timestamp, shift: currentShift });
+        setMessage({ type: 'success', text: 'Cliente cadastrado na base da Incorporadora.' });
+      } else {
+        if (['Indicação', 'Retorno'].includes(route.visit_reason) && !route.referred_broker_id) throw new Error('Selecione o corretor original.');
+        const preOpeningAssignee = destination === 'normal' ? choosePreOpeningBroker(route.referred_broker_id) : null;
+        const { queue_type, ...visit } = route;
+        const result = await supabase.from('visits').insert({ ...visit, ...media, customer_name: customerName.trim(), pre_opening_assignee: preOpeningAssignee, status: 'aguardando', created_at: timestamp }).select().single();
+        if (result.error || !result.data) throw result.error || new Error('Não foi possível cadastrar a visita.');
+        createdId = result.data.id;
+        const queued = await supabase.from('queue_entries').insert({ visit_id: createdId, agency: brokers.find(b => b.id === route.referred_broker_id)?.agency ?? 'Viva Imóveis', queue_status: 'aguardando', attempts: 0, queue_type, reception_waiting: destination === 'waiting', shift: currentShift, created_at: timestamp }).select().single();
+        if (queued.error || !queued.data) throw new Error(queued.error?.message ?? 'Falha ao criar fila.');
+        createdId = null;
+        if (destination === 'normal' && route.referred_broker_id) {
+          const { broker, split } = resolveReceptionDispatch({ ...queued.data, visit: result.data }, brokers, clock, busyIds, () =>
+            dispatchBroker(brokers, queue_type, simSeconds, busyIds, null, preOpeningAssignee ?? route.referred_broker_id).broker,
+          );
+          if (broker && split) await claimReceptionCall(queued.data, broker, true, timestamp);
+        }
+        setMessage({ type: 'success', text: destination === 'waiting'
+          ? 'Cliente cadastrado na Fila de Espera Geral.'
+          : `${firstName(customerName)} entrou na fila como ${route.visit_reason}.` });
+      }
       setCustomerName(''); setMediaChannel(''); setMediaChannelDetail(''); setPhone(''); setNoPhone(false); setReason('Primeira visita'); setReferredBrokerId(''); setSelectedBroker(null); setBrokerSearch(''); setReturnMatch(null);
     } catch (error) {
       if (createdId) await supabase.from('visits').delete().eq('id', createdId);
@@ -179,7 +203,7 @@ export default function RecepcaoPanel({ brokers, visits, queue }: Props) {
   }
 
   async function handleQuickEntry() {
-    if (!scheduleAt({ seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate }).acceptingClients) { setMessage({ type: 'warning', text: 'Entrada de novos clientes encerrada.' }); return; }
+    if (!allowTestControls || !scheduleAt(clock).acceptingClients) return;
     setQuickSubmitting(true);
     quickCounterRef.current += 1;
     try { localStorage.setItem('global_client_counter', String(quickCounterRef.current)); } catch { /* ignore */ }
@@ -213,73 +237,56 @@ export default function RecepcaoPanel({ brokers, visits, queue }: Props) {
     }
 
     if (quickReason === 'Retorno' || quickReason === 'Indicação') referredBrokerId = quickBrokerId || null;
-    const preOpeningAssignee = choosePreOpeningBroker(referredBrokerId);
-    const entryAgency: Agency = isParceriaQuick ? 'Externo' : targetAgency;
-
-    const { data: visitData, error: visitError } = await supabase
-      .from('visits')
-      .insert({
-        customer_name: fakeName,
-        phone: fakePhone,
-        visit_reason: dbVisitReason,
-        referred_broker_id: referredBrokerId,
-        pre_opening_assignee: preOpeningAssignee,
-        status: 'aguardando',
-        created_at: simTimestamp,
-      })
-      .select()
-      .single();
-
-    if (visitError || !visitData) {
+    const destination = receptionDestination(roster, busyIds, referredBrokerId);
+    let visitId: string | null = null;
+    try {
+      if (destination === 'direct') {
+        await saveDirectLead({ customer_name: fakeName, phone: fakePhone, visit_reason: dbVisitReason,
+          media_channel: null, media_channel_detail: null, created_at: simTimestamp, shift: currentShift, is_test: true });
+      } else {
+        const preOpeningAssignee = destination === 'normal' ? choosePreOpeningBroker(referredBrokerId) : null;
+        const { data: visit, error: visitError } = await supabase.from('visits').insert({
+          customer_name: fakeName, phone: fakePhone, visit_reason: dbVisitReason, referred_broker_id: referredBrokerId,
+          pre_opening_assignee: preOpeningAssignee, status: 'aguardando', created_at: simTimestamp, is_test: true,
+        }).select().single();
+        if (visitError || !visit) throw new Error(visitError?.message ?? 'Falha ao cadastrar visita de teste.');
+        visitId = visit.id;
+        const { data: row, error: queueError } = await supabase.from('queue_entries').insert({
+          visit_id: visit.id, agency: isParceriaQuick ? 'Externo' : brokers.find(b => b.id === referredBrokerId)?.agency ?? targetAgency,
+          queue_status: 'aguardando', attempts: 0, queue_type: queueType, shift: currentShift,
+          created_at: simTimestamp, reception_waiting: destination === 'waiting',
+        }).select().single();
+        if (queueError || !row) throw new Error(queueError?.message ?? 'Falha ao criar fila de teste.');
+        visitId = null;
+        if (destination === 'normal') {
+          const { broker, split } = resolveReceptionDispatch({ ...row, visit }, brokers, clock, busyIds, () =>
+            dispatchBroker(brokers, queueType, simSeconds, busyIds, null, preOpeningAssignee ?? referredBrokerId).broker,
+          );
+          if (broker) await claimReceptionCall(row, broker, split, simTimestamp,
+            !referredBrokerId && queueType === 'geral');
+        }
+      }
+      setQuickLog(items => [{ name: fakeName, phone: fakePhone }, ...items]);
+    } catch (error) {
+      if (visitId) await supabase.from('visits').delete().eq('id', visitId);
+      setMessage({ type: 'error', text: error instanceof Error ? error.message : 'Falha ao simular entrada.' });
+    } finally {
       setQuickSubmitting(false);
-      return;
     }
-
-    let assignedBrokerId: string | null = null;
-    let isProtectedPosition = false;
-    let isStandardAssignment = false;
-    const busyIds = new Set<string>(
-      brokers.filter((b) => b.attendance_status === 'em_mesa' || b.attendance_status === 'decorado' || b.attendance_status === 'em_atendimento').map((b) => b.id),
-    );
-
-    const result = dispatchBroker(brokers, queueType, simSeconds, busyIds, null, preOpeningAssignee ?? referredBrokerId);
-    assignedBrokerId = result.broker?.id ?? null;
-    isProtectedPosition = result.protectedPosition;
-    isStandardAssignment = !referredBrokerId && queueType === 'geral';
-
-    const insertData: Record<string, unknown> = {
-      visit_id: visitData.id,
-      agency: entryAgency,
-      queue_status: assignedBrokerId ? 'chamando' : 'aguardando',
-      attempts: assignedBrokerId ? 1 : 0,
-      queue_type: queueType,
-      shift: currentShift,
-      broker_id: assignedBrokerId,
-      called_at: assignedBrokerId ? simTimestamp : null,
-      created_at: simTimestamp,
-    };
-
-    await supabase.from('queue_entries').insert(insertData);
-
-    if (assignedBrokerId) {
-      const markServed = isStandardAssignment ? markStandardBrokerInService : markBrokerInService;
-      await markServed(assignedBrokerId, simTimestamp);
-      await supabase.from('visits').update({ status: 'aguardando_chamada' }).eq('id', visitData.id);
-    }
-
-    setQuickSubmitting(false);
   }
 
   async function handleDiscardClients() {
-    if (discardCount < 1) return;
+    if (!allowTestControls || discardCount < 1) return;
     setDiscarding(true);
-    const recentVisits = [...visits].reverse().slice(0, discardCount);
+    const recentVisits = visits.filter(visit => visit.is_test).reverse().slice(0, discardCount);
     const visitIds = recentVisits.map((v) => v.id);
     if (visitIds.length > 0) {
       await supabase.from('queue_entries').delete().in('visit_id', visitIds);
       await supabase.from('visits').delete().in('id', visitIds);
     }
-    if (visits.length <= discardCount) {
+    const removed = new Set(recentVisits.map(visit => visit.phone));
+    setQuickLog(items => items.filter(item => !removed.has(item.phone)));
+    if (visits.filter(visit => visit.is_test).length <= discardCount) {
       quickCounterRef.current = 0;
       try { localStorage.setItem('global_client_counter', '0'); } catch { /* ignore */ }
     }
@@ -304,6 +311,7 @@ export default function RecepcaoPanel({ brokers, visits, queue }: Props) {
             <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition ${isHoliday ? 'translate-x-5' : 'translate-x-0.5'}`} />
           </button>
         </div>
+        {allowTestControls && <>
         {/* Simular Entrada Rápida */}
         <div className="bg-gradient-to-r from-amber-500/10 to-orange-500/10 rounded-2xl border border-amber-500/30 p-5 mb-4">
           <div className="flex items-center gap-3 mb-4">
@@ -312,7 +320,7 @@ export default function RecepcaoPanel({ brokers, visits, queue }: Props) {
             </div>
             <div>
               <h2 className="text-lg font-bold text-amber-400">Simular Entrada Rápida</h2>
-              <p className="text-sm text-slate-400">Gera um cliente fictício e envia direto para a fila — funciona em qualquer horário</p>
+              <p className="text-sm text-slate-400">Gera um cliente fictício durante o horário de entrada do plantão.</p>
             </div>
           </div>
           <div className="flex flex-wrap items-end gap-3">
@@ -384,6 +392,18 @@ export default function RecepcaoPanel({ brokers, visits, queue }: Props) {
             </button>
           </div>
 
+          {quickLog.length > 0 && <div aria-label="Telefones de teste" className="mt-3">
+            <ul>{quickLog.map(item => <li key={item.phone} className="flex gap-3 text-sm">
+              <span>{item.name}</span>
+              <button type="button" title="Copiar telefone" className="text-sky-300 underline" onClick={() =>
+                void copyQuickPhone(item.phone, value => navigator.clipboard.writeText(value))
+                  .then(() => setCopyStatus('Telefone copiado.'))
+                  .catch(() => setCopyStatus('Selecione o número para copiar manualmente.'))
+              }>{item.phone}</button>
+            </li>)}</ul>
+            <p role="status" className="text-sm">{copyStatus}</p>
+          </div>}
+
           {/* Rule explanation badges */}
           {isAnyIndicacao && (
             <div className="mt-3 flex flex-wrap gap-2">
@@ -434,6 +454,7 @@ export default function RecepcaoPanel({ brokers, visits, queue }: Props) {
             </p>
           </div>
         </div>
+        </>}
 
         <div className="bg-slate-900 rounded-2xl border border-slate-800 p-6">
           <div className="flex items-center gap-3 mb-6">

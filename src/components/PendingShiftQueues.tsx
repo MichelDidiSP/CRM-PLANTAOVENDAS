@@ -14,6 +14,9 @@ export default function PendingShiftQueues({
       <h2 className="text-lg text-indigo-300 mb-3">
         {title}
       </h2>
+      <p className="mb-3 text-indigo-300">
+        Ordem das imobiliárias: 1ª {draw.firstAgency} · 2ª {draw.firstAgency === 'Viva Imóveis' ? 'Casa Nobre' : 'Viva Imóveis'}
+      </p>
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {[
           { label: "Viva Imóveis", ids: draw.viva },

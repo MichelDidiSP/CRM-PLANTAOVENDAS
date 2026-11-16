@@ -1,0 +1,27 @@
+name: Validar CRM
+on:
+  pull_request:
+  push:
+    branches:
+      - 'codex/orquestracao-recepcao-fechamento'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Confirmar módulos congelados
+        run: git diff --exit-code 95ac905c1b5d694a9352ddba308e4501f7572714 HEAD -- src/lib/queue/coreDistribution.ts src/lib/queue/shiftSchedule.ts src/lib/queue/pauseAndPartners.ts src/lib/reception/intake.ts
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
+      - run: npm run build

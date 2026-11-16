@@ -79,6 +79,7 @@ export type Visit = {
   customer_name: string;
   phone: string | null;
   visit_reason: VisitReason;
+  is_test?: boolean;
   referred_broker_id: string | null;
   status: 'aguardando' | 'aguardando_chamada' | 'em_atendimento' | 'encerrado' | 'recusado';
   created_at: string;
@@ -95,6 +96,8 @@ export type QueueEntry = {
   called_at: string | null;
   reentry_at: string | null;
   queue_type: QueueType;
+  reception_waiting?: boolean;
+  commission_split?: boolean;
   sorteio_session: string | null;
   shift: Shift | null;
   created_at: string;

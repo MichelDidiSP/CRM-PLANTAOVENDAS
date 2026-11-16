@@ -2,6 +2,9 @@ import { supabase, dbReady } from '../supabase';
 import { scopeRows, attendanceType, businessDate, normalizedMedia, periodBounds, type ReportFilter, type ReportRow, type ReportShift } from './shiftClosingReport';
 // Simulator cache retains only quantitative dimensions and technical event IDs.
 const cache = new Map<string, ReportRow>();
+export function resetSimulatorReport(date: string) {
+  for (const [key, row] of cache) if (row.date === date) cache.delete(key);
+}
 export async function loadReportRows(filter: ReportFilter): Promise<ReportRow[]> {
   if (filter.scope === 'imobiliaria' && !filter.company?.trim()) return [];
   await dbReady;
@@ -17,14 +20,15 @@ export async function loadReportRows(filter: ReportFilter): Promise<ReportRow[]>
     }
   }
   // Separate column projections deliberately exclude all customer names and phones.
-  const [queue, visits, brokers, partners, sessions] = await Promise.all([
+  const [queue, visits, brokers, partners, sessions, direct] = await Promise.all([
     supabase.from('queue_entries').select('id,visit_id,broker_id,agency,queue_type,queue_status,shift,created_at'),
     supabase.from('visits').select('id,visit_reason,media_channel,created_at'),
     supabase.from('brokers').select('id,agency,equipe'),
     supabase.from('external_partner_intakes').select('id,created_at,manager_status,company'),
     supabase.from('plantao_sessions').select('id,plantao_date'),
+    supabase.from('incorporadora_direct_leads').select('id,created_at,shift,visit_reason,media_channel'),
   ]);
-  for (const result of [queue,visits,brokers,partners,sessions]) if (result.error) throw result.error;
+  for (const result of [queue,visits,brokers,partners,sessions,direct]) if (result.error) throw result.error;
   for (const entry of queue.data ?? []) {
     if (!['em_atendimento','concluido'].includes(entry.queue_status)) continue;
     const visit = visits.data?.find(v=>v.id===entry.visit_id);
@@ -41,5 +45,9 @@ export async function loadReportRows(filter: ReportFilter): Promise<ReportRow[]>
     const key = `partner:${partner.id}`;
     if (!cache.has(key)) cache.set(key,{date,shift: afternoon && time >= '14:00:01' ? 'tarde':'manha',company:partner.company?.trim() || 'Autônomo',team:'Parcerias',type:'Parceria Externa',media:'Outros',count:1});
   }
-  return scopeRows([...cache.values()].filter(r=>r.date>=start && r.date<=end),filter);
+  const directRows: ReportRow[] = (direct.data ?? []).map(lead => ({
+    date: businessDate(lead.created_at), shift: lead.shift, company: 'Incorporadora', team: 'Sem Equipe',
+    type: attendanceType(lead.visit_reason), media: normalizedMedia(lead.media_channel), count: 1,
+  }));
+  return scopeRows([...cache.values(), ...directRows].filter(row => row.date >= start && row.date <= end), filter);
 }
