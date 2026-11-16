@@ -29,7 +29,7 @@ it('inclui a entrada direta nos fatos e guarda o cadastro apenas no snapshot nom
   expect(closingText(result)).toContain('Total de registros: 2');
   expect(JSON.stringify(result)).not.toMatch(/Cliente Exclusivo|Cliente Atendido|11912345678|11955555555/);
   const { data } = await supabase.from('plantao_daily_closures').select('customers').eq('date', date).single();
-  expect(data.customers).toEqual(expect.arrayContaining([
+  expect(data?.customers).toEqual(expect.arrayContaining([
     expect.objectContaining({ name: 'Cliente Exclusivo', phone: '11912345678', media: 'Google / Pesquisa', broker: null }),
     expect.objectContaining({ name: 'Cliente Atendido', phone: '11955555555', media: 'Outros', type: 'Retorno', broker: 'Corretora', commission_split: true }),
   ]));

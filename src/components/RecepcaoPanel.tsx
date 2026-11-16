@@ -187,7 +187,7 @@ export default function RecepcaoPanel({ brokers, visits, queue, allowTestControl
         createdId = null;
         if (destination === 'normal' && route.referred_broker_id) {
           const { broker, split } = resolveReceptionDispatch({ ...queued.data, visit: result.data }, brokers, clock, busyIds, () =>
-            dispatchBroker(brokers, queue_type, simSeconds, busyIds, null, preOpeningAssignee ?? route.referred_broker_id).broker,
+            dispatchBroker(brokers, queue_type as QueueEntry['queue_type'], simSeconds, busyIds, null, preOpeningAssignee ?? route.referred_broker_id).broker,
           );
           if (broker && split) await claimReceptionCall(queued.data, broker, true, timestamp);
         }

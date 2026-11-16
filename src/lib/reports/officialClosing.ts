@@ -15,6 +15,8 @@ export function closingText(summary: ClosingSummary) {
     `Relatório Quantitativo Final — ${summary.date.split('-').reverse().join('/')}`,
     `Total de registros: ${report.total}`,
     ...report.companies.map(row => `${row.label}: ${row.count}`),
+    'Tipos de visita',
+    ...report.types.filter(row => row.count > 0).map(row => `${row.label}: ${row.count}`),
     'Origem por canal de mídia',
     ...report.media.map(row => `${row.label}: ${row.count}`),
   ].join('\n');
