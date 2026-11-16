@@ -1,0 +1,63 @@
+name: Validar CRM
+on:
+  pull_request:
+  push:
+    branches:
+      - 'codex/orquestracao-recepcao-fechamento'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Confirmar módulos congelados
+        run: git diff --exit-code 95ac905c1b5d694a9352ddba308e4501f7572714 HEAD -- src/lib/queue/coreDistribution.ts src/lib/queue/shiftSchedule.ts src/lib/queue/pauseAndPartners.ts src/lib/reception/intake.ts
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
+      - run: npm run build
+
+  database:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      PGHOST: localhost
+      PGUSER: postgres
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+      - name: Aplicar migrações e validar recepção e fechamento
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE anon;
+          CREATE ROLE authenticated;
+          CREATE SCHEMA auth;
+          CREATE TABLE auth.users (id uuid PRIMARY KEY);
+          CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE
+            AS $$ SELECT nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
+          ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO anon, authenticated;
+          SQL
+          for migration in supabase/migrations/*.sql; do
+            # Use the applied copies of the migration drafts duplicated by Bolt.
+            case "$migration" in
+              */20261113000000_*|*/20261113180000_*|*/20261113230000_*|*/20261115150000_*|*/20261115180000_*) continue ;;
+            esac
+            psql -v ON_ERROR_STOP=1 -f "$migration"
+          done
+          psql -f supabase/tests/reception_fallback.sql

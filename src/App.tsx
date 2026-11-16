@@ -1,5 +1,9 @@
 import ShiftClosingDashboard from '@/components/ShiftClosingDashboard';
-import { loadReportRows } from '@/lib/reports/reportStore';
+import { resetSimulatorReport } from '@/lib/reports/reportStore';
+import OfficialClosingPanel from '@/components/OfficialClosingPanel';
+import { isPlantaoClosed } from '@/lib/reports/officialClosing';
+import { busyReceptionIds, receptionDestination, receptionRoster, visibleDraws } from '@/lib/reception/fallbackOrchestrator';
+import { dispatchGeneralWaiting } from '@/lib/reception/fallbackStore';
 import PauseAuditPanel from '@/components/PauseAuditPanel';
 import { enforcePauses, resetPauseState } from '@/lib/queue/pauseAndPartnersStore';
 import { onlyOwn } from '@/lib/queue/pauseAndPartners';
@@ -8,12 +12,12 @@ import { advanceSchedule } from '@/lib/queue/shiftScheduleStore';
 import { scheduleAt, type ShiftDraw } from '@/lib/queue/shiftSchedule';
 import PendingShiftQueues from '@/components/PendingShiftQueues';
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { Building2, DoorOpen, Tv, Users, ListOrdered, Zap, Clock, Plus, Shuffle, ClipboardList, RefreshCw, FileText, X, Trophy, Calendar, Sun, Moon, ArrowRight, Home, Database, TriangleAlert as AlertTriangle } from 'lucide-react';
+import { Building2, DoorOpen, Tv, Users, ListOrdered, Zap, Clock, Plus, Shuffle, ClipboardList, RefreshCw, X, Trophy, Calendar, Sun, Moon, ArrowRight, Home, Database, TriangleAlert as AlertTriangle } from 'lucide-react';
 import { supabase, dbReady, type Broker, type QueueEntry, type Visit, type PlantaoSession } from '@/lib/supabase';
 import { setCompanyDrawOrder, setCompanyRotationIndex, fetchAll, interleaveQueue, reiniciarPlantao, isLateForSort } from '@/lib/queueEngine';
 import { SimProvider, useSim } from '@/lib/simContext';
 
-import RecepcaoPanel from '@/components/RecepcaoPanel';
+import RecepcaoPanel, { type QuickEntryLog } from '@/components/RecepcaoPanel';
 import ChamadasPanel from '@/components/ChamadasPanel';
 import CorretorPanel from '@/components/CorretorPanel';
 import FilaPanel from '@/components/ScheduledFilaPanel';
@@ -25,7 +29,9 @@ function AppContent() {
   const schedule = scheduleAt({ seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate });
   const [morningDraw, setMorningDraw] = useState<ShiftDraw | null>(null);
   const [afternoonDraw, setAfternoonDraw] = useState<ShiftDraw | null>(null);
-  const [pendingDraw, setPendingDraw] = useState<ShiftDraw | null>(null);
+  const [closedDay, setClosedDay] = useState<string | null>(null);
+  const closed = closedDay === plantaoDate;
+  const publishedDraws = visibleDraws(simSeconds, isExtendedShift, morningDraw, afternoonDraw);
   const scheduleRunning = useRef(false);
   const [view, setView] = useState<View>('recepcao');
   const [brokers, setBrokers] = useState<Broker[]>([]);
@@ -34,7 +40,7 @@ function AppContent() {
   const [activeSession, setActiveSession] = useState<PlantaoSession | null>(null);
   const [loading, setLoading] = useState(true);
   const [reiniciarDialog, setReiniciarDialog] = useState(false);
-  const [attendanceReport, setAttendanceReport] = useState<QueueEntry[] | null>(null);
+  const [quickLog, setQuickLog] = useState<QuickEntryLog[]>([]);
   const [reiniciando, setReiniciando] = useState(false);
   const pollRef = useRef<number | undefined>(undefined);
 
@@ -45,6 +51,14 @@ function AppContent() {
 
   const load = useCallback(async () => {
     const data = await fetchAll();
+    let dayClosed: boolean;
+    try { dayClosed = await isPlantaoClosed(plantaoDate); }
+    catch (error) {
+      setLoadError(error instanceof Error ? error.message : 'Não foi possível consultar o fechamento do plantão.');
+      setLoading(false);
+      return;
+    }
+    setClosedDay(dayClosed ? plantaoDate : null);
     if (data.error) {
       setLoadError('Não foi possível conectar ao banco de dados. Verifique a conexão e tente novamente.');
       setLoading(false);
@@ -60,6 +74,7 @@ function AppContent() {
     setMorningDraw(draws.data?.find((e: { id: string }) => e.id === `schedule_${plantaoDate}_morning`)?.schedule_data ?? null);
     setAfternoonDraw(draws.data?.find((e: { id: string }) => e.id === `schedule_${plantaoDate}_afternoon`)?.schedule_data ?? null);
     setLoading(false);
+    return dayClosed ? undefined : data;
   }, [plantaoDate]);
 
   useEffect(() => {
@@ -82,13 +97,19 @@ function AppContent() {
   }, [load]);
 
   useEffect(() => {
-    if (loading || scheduleRunning.current) return;
+    if (loading || closed || scheduleRunning.current) return;
     scheduleRunning.current = true;
-    advanceSchedule({ seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate })
-      .then(async draw => { setPendingDraw(draw); await enforcePauses({ at: getCurrentTime().toISOString(), shift: currentShift }); return load(); })
+    advanceSchedule({ seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate }, { deferClosing: true })
+      .then(async () => {
+        const at = getCurrentTime().toISOString();
+        await enforcePauses({ at, shift: currentShift });
+        const live = await load();
+        if (live && await dispatchGeneralWaiting(live.queue, live.brokers,
+          { seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate }, at)) await load();
+      })
       .catch(error => setLoadError(`Erro na agenda do plantão: ${error instanceof Error ? error.message : String(error)}`))
       .finally(() => { scheduleRunning.current = false; });
-  }, [simSeconds, isExtendedShift, plantaoDate, loading, load, getCurrentTime, currentShift]);
+  }, [simSeconds, isExtendedShift, plantaoDate, loading, closed, load, getCurrentTime, currentShift]);
 
   useEffect(() => {
     const session = activeSession as (PlantaoSession & { schedule_data?: ShiftDraw }) | null;
@@ -100,20 +121,27 @@ function AppContent() {
   }, [activeSession]);
 
   const sortedQueue = interleaveQueue(queue, brokers, activeSession?.last_called_agency ?? null);
+  const partnerIntakeRedirected = schedule.acceptingClients && receptionDestination(
+    receptionRoster(brokers, { seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate }),
+    busyReceptionIds(queue), null,
+  ) !== 'normal';
 
   async function handleReiniciar() {
+    if (dbConnected !== false) return;
     setReiniciando(true);
-    const concluded = queue.filter((e) => e.queue_status === 'concluido' || e.queue_status === 'em_atendimento');
-    setAttendanceReport(concluded);
-
-    if (typeof supabase.rpc !== 'function') await loadReportRows({ period: 'week', date: plantaoDate, shift: currentShift });
-    await resetPauseState();
-    await reiniciarPlantao(brokers);
-    resetClock();
-    await load();
-    setReiniciando(false);
-    setReiniciarDialog(false);
-    setView('auditoria');
+    try {
+      await resetPauseState();
+      await reiniciarPlantao(brokers);
+      await supabase.from('plantao_daily_closures').delete().eq('date', plantaoDate);
+      await supabase.from('incorporadora_direct_leads').delete().eq('is_test', true);
+      resetSimulatorReport(plantaoDate);
+      setQuickLog([]);
+      resetClock();
+      await load();
+      setReiniciarDialog(false);
+    } finally {
+      setReiniciando(false);
+    }
   }
 
   const navItems: { id: View; label: string; icon: React.ReactNode }[] = [
@@ -225,13 +253,13 @@ function AppContent() {
                 <Zap className="h-4 w-4" /> {testMode ? 'Teste ON' : 'Teste rápido'}
               </button>
 
-              <button
+              {dbConnected === false && <button
                 onClick={() => setReiniciarDialog(true)}
                 className="flex items-center gap-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 px-3 py-2 rounded-lg text-sm font-medium transition border border-red-500/20"
                 title="Reiniciar plantão para novo teste"
               >
                 <RefreshCw className="h-4 w-4" /> Reiniciar Plantão
-              </button>
+              </button>}
             </div>
             </div>
 
@@ -273,15 +301,20 @@ function AppContent() {
         {loadError && <p role="alert" className="text-red-400 mb-4">{loadError}</p>}
         {view === 'auditoria' && <ShiftClosingDashboard />}
         {view === 'auditoria' && <PauseAuditPanel brokers={brokers} />}
-        {(schedule.afternoonActive ? afternoonDraw : morningDraw) && <p className="mb-4 text-lg text-amber-300">Ordem do Sorteio: 1ª {(schedule.afternoonActive ? afternoonDraw : morningDraw)!.firstAgency} | 2ª {(schedule.afternoonActive ? afternoonDraw : morningDraw)!.firstAgency === 'Viva Imóveis' ? 'Casa Nobre' : 'Viva Imóveis'}</p>}
-        {morningDraw && schedule.preOpening && <PendingShiftQueues draw={morningDraw} brokers={brokers} title="Sorteio da manhã — ativação às 09:00. Ordem de chegada continua ativa." />}
-        {pendingDraw && <><p className="mb-3 text-indigo-300">Ordem do Sorteio da Tarde: 1ª {pendingDraw.firstAgency} | 2ª {pendingDraw.firstAgency === 'Viva Imóveis' ? 'Casa Nobre' : 'Viva Imóveis'}</p><PendingShiftQueues draw={pendingDraw} brokers={brokers} title="Sorteio da tarde — ativação às 14:00:01. Filas da manhã continuam ativas." /></>}
+        {(view === 'recepcao' || view === 'corretor') && <OfficialClosingPanel key={plantaoDate}
+          date={plantaoDate} closed={closed} onClosed={() => setClosedDay(plantaoDate)} />}
+        {closed && <p role="status" className="mb-4 text-amber-300">Plantão encerrado para esta data.</p>}
+        {publishedDraws.morning && <PendingShiftQueues draw={publishedDraws.morning} brokers={brokers}
+          title={schedule.preOpening ? 'Sorteio da manhã — ordem de chegada até 08:59:59' : 'Sorteio da manhã'} />}
+        {publishedDraws.afternoon && <PendingShiftQueues draw={publishedDraws.afternoon} brokers={brokers}
+          title={schedule.coexistence ? 'Sorteio da tarde — fila da manhã ainda em operação' : 'Sorteio da tarde'} />}
         {view === 'auditoria' && <section className="mb-6 grid md:grid-cols-2 gap-4">{(['manha', 'tarde'] as const).filter(shift => !isExtendedShift || shift === 'manha').map(shift => <div key={shift}><h2 className="font-bold">Inscritos — {shift === 'manha' ? 'Manhã / Integral' : 'Tarde'}</h2><ul>{brokers.filter(b => !b.is_external_partner && (shift === 'manha' ? (morningDraw && [...morningDraw.viva, ...morningDraw.nobre].includes(b.id)) || b.shift === 'manha' && b.arrived_at?.startsWith(plantaoDate) : (b as Broker & { afternoon_enrolled_at?: string }).afternoon_enrolled_at?.startsWith(plantaoDate) || b.shift === 'tarde' && b.arrived_at)).map(b => <li key={b.id}>{b.operational_name} · {b.agency}</li>)}</ul></div>)}</section>}
-        {view === 'recepcao' && <><ExternalPartnerPanel /><RecepcaoPanel brokers={brokers} visits={visits} queue={queue} /></>}
-        {view === 'chamadas' && <><ExternalPartnerPanel callsOnly /><ChamadasPanel queue={queue} brokers={brokers} /></>}
-        {view === 'corretor' && <><CorretorPanel brokers={brokers} /><ExternalPartnerPanel managementOnly /></>}
-        {view === 'fila' && <FilaPanel queue={sortedQueue} brokers={brokers} allQueue={queue} />}
-        {view === 'auditoria' && <AuditoriaPanel brokers={brokers.filter(b => !onlyOwn(b))} queue={queue} attendanceReport={attendanceReport} isAfternoonActive={isAfternoonActive} isMorningQueueActive={isMorningQueueActive} />}
+        {view === 'recepcao' && !closed && <><ExternalPartnerPanel intakeRedirected={partnerIntakeRedirected} /><RecepcaoPanel brokers={brokers} visits={visits} queue={queue}
+          allowTestControls={dbConnected === false || import.meta.env.VITE_PLANTAO_TEST_DATABASE === 'true'} quickLog={quickLog} setQuickLog={setQuickLog} /></>}
+        {view === 'chamadas' && !closed && <><ExternalPartnerPanel callsOnly /><ChamadasPanel queue={queue} brokers={brokers} /></>}
+        {view === 'corretor' && !closed && <><CorretorPanel brokers={brokers} /><ExternalPartnerPanel managementOnly /></>}
+        {view === 'fila' && !closed && <FilaPanel queue={sortedQueue} brokers={brokers} allQueue={queue} />}
+        {view === 'auditoria' && <AuditoriaPanel brokers={brokers.filter(b => !onlyOwn(b))} queue={queue} isAfternoonActive={isAfternoonActive} isMorningQueueActive={isMorningQueueActive} />}
       </main>
 
       <footer className="border-t border-slate-800 py-3 text-center text-xs text-slate-500">
@@ -315,11 +348,7 @@ function AppContent() {
               </div>
               <div className="flex items-start gap-2 text-sm text-slate-300">
                 <span className="text-amber-400 mt-0.5">3.</span>
-                <span>Um <strong className="text-white">Relatório de Atendimentos</strong> do teste será exibido na aba Auditoria.</span>
-              </div>
-              <div className="flex items-start gap-2 text-sm text-emerald-400 bg-emerald-500/10 rounded-lg p-2.5">
-                <span className="mt-0.5"><FileText className="h-4 w-4" /></span>
-                <span>O <strong>Banco de Dados de Clientes</strong> (histórico e telefones) <strong>não será apagado</strong> — permanece para validação de Retorno, Indicação, Parceria e Duplicidade.</span>
+                <span>O histórico de visitas fica disponível para testar Retorno e Duplicidade.</span>
               </div>
             </div>
 
@@ -350,66 +379,15 @@ function brokerStatusBadge(b: Broker): { label: string; color: string } {
   }
 }
 
-function AuditoriaPanel({ brokers, queue, attendanceReport, isAfternoonActive, isMorningQueueActive }: {
+function AuditoriaPanel({ brokers, queue, isAfternoonActive, isMorningQueueActive }: {
   brokers: Broker[];
   queue: QueueEntry[];
-  attendanceReport: QueueEntry[] | null;
   isAfternoonActive: boolean;
   isMorningQueueActive: boolean;
 }) {
   const { isPreSorteio: isPreOpening } = useSim();
   return (
     <div className="space-y-6">
-      {/* Relatório de Atendimentos */}
-      {attendanceReport && (
-        <div className="bg-slate-900 rounded-2xl border border-slate-800 p-6">
-          <div className="flex items-center gap-3 mb-6">
-            <div className="bg-emerald-500/10 p-3 rounded-xl"><FileText className="h-6 w-6 text-emerald-400" /></div>
-            <div>
-              <h2 className="text-xl font-bold">Relatório de Atendimentos</h2>
-              <p className="text-sm text-slate-400">Histórico do teste que foi encerrado</p>
-            </div>
-          </div>
-
-          {attendanceReport.length === 0 ? (
-            <p className="text-sm text-slate-500 text-center py-8">Nenhum atendimento concluído neste teste.</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-slate-700 text-left">
-                    <th className="py-2 px-3 text-slate-400 font-medium">#</th>
-                    <th className="py-2 px-3 text-slate-400 font-medium">Cliente</th>
-                    <th className="py-2 px-3 text-slate-400 font-medium">Corretor</th>
-                    <th className="py-2 px-3 text-slate-400 font-medium">Equipe</th>
-                    <th className="py-2 px-3 text-slate-400 font-medium">Imobiliária</th>
-                    <th className="py-2 px-3 text-slate-400 font-medium">Motivo</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {attendanceReport.map((entry, i) => {
-                    const broker = entry.broker_id ? brokers.find((b) => b.id === entry.broker_id) : undefined;
-                    const reportAgency = broker?.agency ?? entry.agency;
-                    return (
-                      <tr key={entry.id} className="border-b border-slate-800/50">
-                        <td className="py-2.5 px-3 text-slate-500 font-mono">{i + 1}</td>
-                        <td className="py-2.5 px-3 text-white font-medium">{entry.visit?.customer_name ?? '—'}</td>
-                        <td className="py-2.5 px-3 text-slate-300">{broker?.operational_name ?? '—'}</td>
-                        <td className="py-2.5 px-3 text-slate-400 text-xs">{broker?.equipe ?? '—'}</td>
-                        <td className="py-2.5 px-3">
-                          <span className={`text-xs px-2 py-0.5 rounded-full ${reportAgency === 'Viva Imóveis' ? 'bg-amber-500/15 text-amber-400' : reportAgency === 'Casa Nobre' ? 'bg-sky-500/15 text-sky-400' : 'bg-slate-600/30 text-slate-400'}`}>{reportAgency}</span>
-                        </td>
-                        <td className="py-2.5 px-3 text-slate-400">{entry.visit?.visit_reason ?? '—'}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      )}
-
       {/* FILA DE ORDEM DE CHEGADA — fixada para auditoria */}
       {isPreOpening && (
       <div className="bg-slate-900 rounded-2xl border border-sky-500/20 p-6">

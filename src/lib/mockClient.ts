@@ -66,11 +66,14 @@ function createSeedData(): Record<string, Row[]> {
       mk('Roberto Parceiro', 'Externo', 'Parcerias', true, 'Imobiliária ABC'),
     ],
     visits: [],
+    incorporadora_direct_leads: [],
+    plantao_daily_closures: [],
     queue_entries: [],
     plantao_sessions: [],
     relatorio_fechamento: [],
     pause_audit: [],
     external_partner_intakes: [],
+    partner_reception_details: [],
     external_partner_reservations: [],
   };
 }

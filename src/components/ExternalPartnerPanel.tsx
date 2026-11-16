@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import {
-  createPartnerIntake,
   reservePartnerUnit,
   savePartnerSale,
 } from "@/lib/queue/pauseAndPartnersStore";
@@ -9,15 +8,22 @@ import type {
   PartnerIntake,
   PartnerReservation,
 } from "@/lib/queue/pauseAndPartners";
+import { useSim } from '@/lib/simContext';
+import { savePartnerReception } from '@/lib/reception/fallbackStore';
+import { MEDIA_CHANNELS, mediaChannelFields } from '@/lib/reports/shiftClosingReport';
+
 const inputStyle = "block w-full bg-slate-800 rounded-lg p-2 mt-1 text-white";
 export default function ExternalPartnerPanel({
   managementOnly = false,
   callsOnly = false,
+  intakeRedirected = false,
 }: {
   managementOnly?: boolean;
   callsOnly?: boolean;
+  intakeRedirected?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const { getCurrentTime } = useSim();
   const [rows, setRows] = useState<PartnerIntake[]>([]);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -26,7 +32,9 @@ export default function ExternalPartnerPanel({
     partner_name: "",
     company: "",
     creci: "",
-    client_first_name: "",
+    customer_name: '',
+    phone: '',
+    media: '',
     arrival: "accompanied" as PartnerIntake["arrival"],
     manager_target: "partnerships" as PartnerIntake["manager_target"],
   });
@@ -48,17 +56,21 @@ export default function ExternalPartnerPanel({
   }, []);
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (intakeRedirected) return;
     setSaving(true);
     setError("");
     try {
-      await createPartnerIntake(draft);
+      const { customer_name, phone, media, ...partner } = draft;
+      await savePartnerReception(partner, { customer_name, phone, ...mediaChannelFields(media) }, getCurrentTime().toISOString());
       setDraft({
         ...draft,
         id: crypto.randomUUID(),
         partner_name: "",
         company: "",
         creci: "",
-        client_first_name: "",
+        customer_name: '',
+        phone: '',
+        media: '',
       });
       setOpen(false);
       await load();
@@ -80,7 +92,7 @@ export default function ExternalPartnerPanel({
     <section className="bg-slate-900 border border-sky-500/30 rounded-2xl p-5 mb-6 space-y-4">
       <div className="flex justify-between gap-3">
         <h2 className="text-lg font-bold text-sky-300">Parceria externa</h2>
-        {!managementOnly && !callsOnly && (
+        {!managementOnly && !callsOnly && !intakeRedirected && (
           <button
             className="bg-sky-700 rounded-lg px-4 py-2"
             onClick={() => setOpen(!open)}
@@ -89,7 +101,8 @@ export default function ExternalPartnerPanel({
           </button>
         )}
       </div>
-      {open && (
+      {intakeRedirected && <p className="text-sm text-sky-300">Para nova visita de parceria, use o formulário da Recepção abaixo.</p>}
+      {open && !intakeRedirected && (
         <form
           onSubmit={submit}
           className="grid md:grid-cols-2 gap-4 text-sm text-slate-300"
@@ -124,15 +137,22 @@ export default function ExternalPartnerPanel({
             />
           </label>
           <label>
-            Apenas o primeiro nome do cliente
-            <input
-              className={inputStyle}
-              required
-              value={draft.client_first_name}
-              onChange={(e) =>
-                setDraft({ ...draft, client_first_name: e.target.value })
-              }
-            />
+            Nome do cliente
+            <input className={inputStyle} required value={draft.customer_name}
+              onChange={e => setDraft({ ...draft, customer_name: e.target.value })} />
+          </label>
+          <label>
+            Telefone com DDD, se informado
+            <input className={inputStyle} type="tel" value={draft.phone}
+              onChange={e => setDraft({ ...draft, phone: e.target.value })} />
+          </label>
+          <label>
+            Canal de mídia
+            <select className={inputStyle} required value={draft.media}
+              onChange={e => setDraft({ ...draft, media: e.target.value })}>
+              <option value="">Selecione o canal de mídia</option>
+              {MEDIA_CHANNELS.map(channel => <option key={channel}>{channel}</option>)}
+            </select>
           </label>
           <label>
             Chegada

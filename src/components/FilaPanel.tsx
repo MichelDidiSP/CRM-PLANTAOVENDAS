@@ -2,6 +2,8 @@ import { firstName, attendanceTrace } from '@/lib/reception/intake';
 import { Bell, CircleCheck as CheckCircle2, Eye, ArrowLeftRight, Clock, TriangleAlert as AlertTriangle, UserCheck, History, Chrome as Home, Repeat, Sun, Moon } from 'lucide-react';
 import { supabase, type Broker, type QueueEntry, type Agency } from '@/lib/supabase';
 import { markMeritReturns, concludeAttendance, isLateForSort, interleaveQueue, reverseInterleaveQueue, nextBrokerFromInverseQueue, nextBrokerForGeneralQueue, nextBrokerByArrival, nextBrokerFromInverseTop, moveBrokerToEndOfDirectQueue, moveBrokerToEndOfInverseQueue, dispatchBroker, isArrivalOrderMode, nextBrokerByArrivalAnyAgency, nextBrokerByArrivalInverse, ATENDIMENTO_MANHA_START, markBrokerInService, markStandardBrokerInService } from '@/lib/queueEngine';
+import { resolveReceptionDispatch } from '@/lib/reception/fallbackOrchestrator';
+import { claimReceptionCall } from '@/lib/reception/fallbackStore';
 import { useSim } from '@/lib/simContext';
 
 type Props = {
@@ -11,15 +13,18 @@ type Props = {
 };
 
 export default function FilaPanel({ queue, brokers, allQueue }: Props) {
-  const { isPreSorteio, currentShift, simSeconds } = useSim();
+  const { isPreSorteio, currentShift, simSeconds, isExtendedShift, plantaoDate } = useSim();
   const waiting = queue.filter((e) => e.queue_status === 'aguardando');
   const calling = allQueue.filter((e) => e.queue_status === 'chamando');
   const inAttendance = allQueue.filter((e) => e.queue_status === 'em_atendimento');
   const done = allQueue.filter((e) => e.queue_status === 'concluido');
 
-  const geralWaiting = waiting.filter((e) => e.queue_type === 'geral');
-  const decoradoWaiting = waiting.filter((e) => e.queue_type === 'decorado');
-  const parceriaWaiting = waiting.filter((e) => e.queue_type === 'parceria');
+  const clock = { seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate };
+  const receptionWaiting = allQueue.filter(entry => entry.reception_waiting && entry.queue_status === 'aguardando')
+    .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
+  const geralWaiting = waiting.filter((e) => e.queue_type === 'geral' && !e.reception_waiting);
+  const decoradoWaiting = waiting.filter((e) => e.queue_type === 'decorado' && !e.reception_waiting);
+  const parceriaWaiting = waiting.filter((e) => e.queue_type === 'parceria' && !e.reception_waiting);
 
   const nextEntry = geralWaiting[0];
   const nextDecorado = decoradoWaiting[0];
@@ -59,8 +64,15 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
   async function callNext(entry: QueueEntry) {
     const referredBrokerId = entry.visit?.referred_broker_id ?? null;
     const lastCalledAgency = await getLastCalledAgency();
-    const { broker } = dispatchBroker(brokers, entry.queue_type, simSeconds, busyBrokerIds, lastCalledAgency, referredBrokerId);
+    const { broker, split } = resolveReceptionDispatch(entry, brokers, clock, busyBrokerIds, () =>
+      dispatchBroker(brokers, entry.reception_waiting ? 'geral' : entry.queue_type, simSeconds,
+        busyBrokerIds, lastCalledAgency, referredBrokerId).broker,
+    );
     if (!broker) return;
+    if (split || entry.reception_waiting) {
+      await claimReceptionCall(entry, broker, split, new Date().toISOString(), !referredBrokerId && entry.queue_type === 'geral');
+      return;
+    }
     if (entry.visit?.visit_reason === 'Primeira visita') await markMeritReturns(brokers, broker, allQueue);
     await updateEntryToCalling(entry, broker.id, referredBrokerId === null && entry.queue_type === 'geral');
     if (broker && entry.visit?.visit_reason === 'Primeira visita') {
@@ -134,7 +146,9 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
   }
 
   async function autoRecall(entry: QueueEntry, _wasLast: boolean) {
-    if (entry.queue_type === 'decorado') {
+    if (entry.reception_waiting) {
+      await callNext(entry);
+    } else if (entry.queue_type === 'decorado') {
       await callDecorado(entry);
     } else if (entry.queue_type === 'parceria') {
       await callParceria(entry);
@@ -148,7 +162,7 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
   }
 
   async function cancelCall(entry: QueueEntry) {
-    await supabase.from('queue_entries').update({ queue_status: 'aguardando', updated_at: new Date().toISOString() }).eq('id', entry.id);
+    await supabase.from('queue_entries').update({ queue_status: 'aguardando', broker_id: null, updated_at: new Date().toISOString() }).eq('id', entry.id);
     if (entry.visit_id) {
       await supabase.from('visits').update({ status: 'aguardando' }).eq('id', entry.visit_id);
     }
@@ -239,6 +253,15 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
         </Section>
       )}
 
+      {receptionWaiting.length > 0 && (
+        <Section title="Fila de Espera Geral" icon={<Clock className="h-5 w-5 text-amber-300" />} count={receptionWaiting.length}>
+          {receptionWaiting.map((entry, index) => (
+            <QueueRow brokers={brokers} key={entry.id} entry={entry} position={index + 1}>
+              <span className="text-xs text-slate-400">Aguardando corretor livre</span>
+            </QueueRow>
+          ))}
+        </Section>
+      )}
       <Section title={`Fila de espera — Geral ${isPreSorteio ? '(Ordem de Chegada)' : '(Intercalação Infinita)'}`} icon={<Clock className="h-5 w-5 text-slate-400" />} count={geralWaiting.length}>
         {geralWaiting.length === 0 ? (
           <p className="text-sm text-slate-500 text-center py-6">Ninguém aguardando na fila geral.</p>
