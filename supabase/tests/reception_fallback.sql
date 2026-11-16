@@ -17,7 +17,7 @@ SELECT public.record_partner_reception(
 );
 UPDATE public.external_partner_intakes SET manager_status = 'acknowledged'
   WHERE id = '50000000-0000-0000-0000-000000000001';
-DO $
+DO $$
 BEGIN
   IF has_schema_privilege(current_user, 'crm_private', 'USAGE') OR
     has_function_privilege(current_user, 'public.close_plantao_day(date)', 'EXECUTE') THEN
