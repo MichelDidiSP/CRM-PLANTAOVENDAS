@@ -154,6 +154,7 @@ async function applyEvent(
 
 export async function advanceSchedule(
   clock: ScheduleClock,
+  { deferClosing = false } = {},
 ): Promise<ShiftDraw | null> {
   await dbReady;
   const state = scheduleAt(clock);
@@ -210,7 +211,7 @@ export async function advanceSchedule(
   }
   if (state.afternoonActive && !has("activate") && afternoon)
     await applyEvent(clock, "activate", afternoon, brokers);
-  if (state.closed && !has("close"))
+  if (state.closed && !deferClosing && !has("close"))
     await applyEvent(clock, "close", null, brokers);
   // Mirror the completion trigger for the local simulator without changing Stage 1.
   if (typeof supabase.rpc !== "function") {

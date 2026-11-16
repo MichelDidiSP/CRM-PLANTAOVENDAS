@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest';
 import { supabase } from '../supabase';
+import { advanceSchedule } from '../queue/shiftScheduleStore';
 import { saveDirectLead } from '../reception/fallbackStore';
 import { closePlantao, closingShareLinks, closingText, isPlantaoClosed } from './officialClosing';
 import { loadReportRows } from './reportStore';
@@ -40,4 +41,12 @@ it('inclui a entrada direta nos fatos e guarda o cadastro apenas no snapshot nom
   expect(links[0].whatsapp).toMatch(/^https:\/\/wa.me\/5511999990000\?text=/);
   expect(decodeURIComponent(links[1].email ?? '')).toContain('mailto:diretoria@example.com?subject=Relatório Quantitativo Final');
   expect(decodeURIComponent(JSON.stringify(links))).not.toMatch(/Cliente Exclusivo|Cliente Atendido|11912345678|11955555555/);
+});
+
+it('mantém o fechamento oficial pendente quando termina o horário da agenda', async () => {
+  const date = '2040-01-22';
+  await advanceSchedule({ seconds: 21 * 3600, date, singleShift: true }, { deferClosing: true });
+  const scheduled = await supabase.from('plantao_sessions').select('id').eq('id', `schedule_${date}_close`).maybeSingle();
+  expect(scheduled.data).toBeNull();
+  expect(await isPlantaoClosed(date)).toBe(false);
 });

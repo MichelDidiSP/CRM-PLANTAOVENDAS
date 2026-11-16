@@ -20,7 +20,9 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
   const done = allQueue.filter((e) => e.queue_status === 'concluido');
 
   const clock = { seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate };
-  const geralWaiting = waiting.filter((e) => e.queue_type === 'geral' || e.reception_waiting);
+  const receptionWaiting = allQueue.filter(entry => entry.reception_waiting && entry.queue_status === 'aguardando')
+    .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
+  const geralWaiting = waiting.filter((e) => e.queue_type === 'geral' && !e.reception_waiting);
   const decoradoWaiting = waiting.filter((e) => e.queue_type === 'decorado' && !e.reception_waiting);
   const parceriaWaiting = waiting.filter((e) => e.queue_type === 'parceria' && !e.reception_waiting);
 
@@ -68,7 +70,7 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
     );
     if (!broker) return;
     if (split || entry.reception_waiting) {
-      await claimReceptionCall(entry, broker, split, new Date().toISOString());
+      await claimReceptionCall(entry, broker, split, new Date().toISOString(), !referredBrokerId && entry.queue_type === 'geral');
       return;
     }
     if (entry.visit?.visit_reason === 'Primeira visita') await markMeritReturns(brokers, broker, allQueue);
@@ -251,6 +253,15 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
         </Section>
       )}
 
+      {receptionWaiting.length > 0 && (
+        <Section title="Fila de Espera Geral" icon={<Clock className="h-5 w-5 text-amber-300" />} count={receptionWaiting.length}>
+          {receptionWaiting.map((entry, index) => (
+            <QueueRow brokers={brokers} key={entry.id} entry={entry} position={index + 1}>
+              <span className="text-xs text-slate-400">Aguardando corretor livre</span>
+            </QueueRow>
+          ))}
+        </Section>
+      )}
       <Section title={`Fila de espera — Geral ${isPreSorteio ? '(Ordem de Chegada)' : '(Intercalação Infinita)'}`} icon={<Clock className="h-5 w-5 text-slate-400" />} count={geralWaiting.length}>
         {geralWaiting.length === 0 ? (
           <p className="text-sm text-slate-500 text-center py-6">Ninguém aguardando na fila geral.</p>

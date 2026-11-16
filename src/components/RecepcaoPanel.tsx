@@ -2,7 +2,7 @@ import { MEDIA_CHANNELS, mediaChannelFields } from '@/lib/reports/shiftClosingRe
 import { normalizePhone, maskPhone, firstName, lookupReturn, intakeRoute, recentVisits, attendanceTrace } from '@/lib/reception/intake';
 import { onlyOwn } from '@/lib/queue/pauseAndPartners';
 import { scheduleAt, preOpeningChoice } from '@/lib/queue/shiftSchedule';
-import { useState, useRef, useMemo, useEffect } from 'react';
+import { useState, useRef, useMemo, useEffect, type Dispatch, type SetStateAction } from 'react';
 import { UserPlus, Phone, TriangleAlert as AlertTriangle, CircleCheck as CheckCircle2, Clock, Search, EyeOff, Eye, Zap, UserCheck, UserX, Building2, Trash2, X } from 'lucide-react';
 import { supabase, type Broker, type Visit, type VisitReason, type Agency, type QueueEntry } from '@/lib/supabase';
 import {
@@ -15,16 +15,18 @@ import { claimReceptionCall, saveDirectLead } from '@/lib/reception/fallbackStor
 import { useSim } from '@/lib/simContext';
 
 type QuickReason = VisitReason;
+export type QuickEntryLog = { name: string; phone: string };
 
 type Props = {
   brokers: Broker[];
   visits: Visit[];
   queue: QueueEntry[];
   allowTestControls: boolean;
-  testReset: number;
+  quickLog: QuickEntryLog[];
+  setQuickLog: Dispatch<SetStateAction<QuickEntryLog[]>>;
 };
 
-export default function RecepcaoPanel({ brokers, visits, queue, allowTestControls, testReset }: Props) {
+export default function RecepcaoPanel({ brokers, visits, queue, allowTestControls, quickLog, setQuickLog }: Props) {
   const [customerName, setCustomerName] = useState('');
   const [mediaChannel, setMediaChannel] = useState('');
   const [mediaChannelDetail, setMediaChannelDetail] = useState('');
@@ -66,9 +68,7 @@ export default function RecepcaoPanel({ brokers, visits, queue, allowTestControl
   const [quickReason, setQuickReason] = useState<QuickReason>('Primeira visita');
   const [quickBrokerId, setQuickBrokerId] = useState<string>('');
   const [quickSubmitting, setQuickSubmitting] = useState(false);
-  const [quickLog, setQuickLog] = useState<{ name: string; phone: string }[]>([]);
   const [copyStatus, setCopyStatus] = useState('');
-  useEffect(() => { setQuickLog([]); setCopyStatus(''); }, [testReset]);
   const quickCounterRef = useRef<number>(
     (() => {
       try {

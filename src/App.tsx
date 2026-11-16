@@ -17,7 +17,7 @@ import { supabase, dbReady, type Broker, type QueueEntry, type Visit, type Plant
 import { setCompanyDrawOrder, setCompanyRotationIndex, fetchAll, interleaveQueue, reiniciarPlantao, isLateForSort } from '@/lib/queueEngine';
 import { SimProvider, useSim } from '@/lib/simContext';
 
-import RecepcaoPanel from '@/components/RecepcaoPanel';
+import RecepcaoPanel, { type QuickEntryLog } from '@/components/RecepcaoPanel';
 import ChamadasPanel from '@/components/ChamadasPanel';
 import CorretorPanel from '@/components/CorretorPanel';
 import FilaPanel from '@/components/ScheduledFilaPanel';
@@ -40,7 +40,7 @@ function AppContent() {
   const [activeSession, setActiveSession] = useState<PlantaoSession | null>(null);
   const [loading, setLoading] = useState(true);
   const [reiniciarDialog, setReiniciarDialog] = useState(false);
-  const [testReset, setTestReset] = useState(0);
+  const [quickLog, setQuickLog] = useState<QuickEntryLog[]>([]);
   const [reiniciando, setReiniciando] = useState(false);
   const pollRef = useRef<number | undefined>(undefined);
 
@@ -99,7 +99,7 @@ function AppContent() {
   useEffect(() => {
     if (loading || closed || scheduleRunning.current) return;
     scheduleRunning.current = true;
-    advanceSchedule({ seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate })
+    advanceSchedule({ seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate }, { deferClosing: true })
       .then(async () => {
         const at = getCurrentTime().toISOString();
         await enforcePauses({ at, shift: currentShift });
@@ -131,7 +131,7 @@ function AppContent() {
       await supabase.from('plantao_daily_closures').delete().eq('date', plantaoDate);
       await supabase.from('incorporadora_direct_leads').delete().eq('is_test', true);
       resetSimulatorReport(plantaoDate);
-      setTestReset(value => value + 1);
+      setQuickLog([]);
       resetClock();
       await load();
       setReiniciarDialog(false);
@@ -306,7 +306,7 @@ function AppContent() {
           title={schedule.coexistence ? 'Sorteio da tarde — fila da manhã ainda em operação' : 'Sorteio da tarde'} />}
         {view === 'auditoria' && <section className="mb-6 grid md:grid-cols-2 gap-4">{(['manha', 'tarde'] as const).filter(shift => !isExtendedShift || shift === 'manha').map(shift => <div key={shift}><h2 className="font-bold">Inscritos — {shift === 'manha' ? 'Manhã / Integral' : 'Tarde'}</h2><ul>{brokers.filter(b => !b.is_external_partner && (shift === 'manha' ? (morningDraw && [...morningDraw.viva, ...morningDraw.nobre].includes(b.id)) || b.shift === 'manha' && b.arrived_at?.startsWith(plantaoDate) : (b as Broker & { afternoon_enrolled_at?: string }).afternoon_enrolled_at?.startsWith(plantaoDate) || b.shift === 'tarde' && b.arrived_at)).map(b => <li key={b.id}>{b.operational_name} · {b.agency}</li>)}</ul></div>)}</section>}
         {view === 'recepcao' && !closed && <><ExternalPartnerPanel /><RecepcaoPanel brokers={brokers} visits={visits} queue={queue}
-          allowTestControls={dbConnected === false || import.meta.env.VITE_PLANTAO_TEST_DATABASE === 'true'} testReset={testReset} /></>}
+          allowTestControls={dbConnected === false || import.meta.env.VITE_PLANTAO_TEST_DATABASE === 'true'} quickLog={quickLog} setQuickLog={setQuickLog} /></>}
         {view === 'chamadas' && !closed && <><ExternalPartnerPanel callsOnly /><ChamadasPanel queue={queue} brokers={brokers} /></>}
         {view === 'corretor' && !closed && <><CorretorPanel brokers={brokers} /><ExternalPartnerPanel managementOnly /></>}
         {view === 'fila' && !closed && <FilaPanel queue={sortedQueue} brokers={brokers} allQueue={queue} />}
