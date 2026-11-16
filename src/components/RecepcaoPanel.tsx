@@ -112,6 +112,7 @@ export default function RecepcaoPanel({ brokers, visits, queue, allowTestControl
   const clock = { seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate };
   const busyIds = busyReceptionIds(queue);
   const roster = receptionRoster(brokers, clock);
+  const partnershipUsesFallback = receptionDestination(roster, busyIds, null) !== 'normal';
 
   function handleReasonChange(newReason: VisitReason) {
     setReason(newReason);
@@ -169,6 +170,9 @@ export default function RecepcaoPanel({ brokers, visits, queue, allowTestControl
       const previous = await lookupReturn(noPhone ? '' : phone);
       const route = intakeRoute(phone, noPhone, reason, referredBrokerId || null, previous);
       const destination = receptionDestination(roster, busyIds, route.referred_broker_id);
+      if (route.visit_reason === 'Parceria' && destination === 'normal') {
+        throw new Error('Há corretor livre. Use o cadastro de Parceria Externa para chamar a gerência.');
+      }
       const timestamp = getCurrentTime().toISOString();
       const media = mediaChannelFields(mediaChannel, mediaChannelDetail);
       if (destination === 'direct') {
@@ -178,7 +182,8 @@ export default function RecepcaoPanel({ brokers, visits, queue, allowTestControl
       } else {
         if (['Indicação', 'Retorno'].includes(route.visit_reason) && !route.referred_broker_id) throw new Error('Selecione o corretor original.');
         const preOpeningAssignee = destination === 'normal' ? choosePreOpeningBroker(route.referred_broker_id) : null;
-        const { queue_type, ...visit } = route;
+        const { queue_type: originalQueueType, ...visit } = route;
+        const queue_type: QueueEntry['queue_type'] = route.visit_reason === 'Parceria' ? 'parceria' : originalQueueType === 'decorado' ? 'decorado' : 'geral';
         const result = await supabase.from('visits').insert({ ...visit, ...media, customer_name: customerName.trim(), pre_opening_assignee: preOpeningAssignee, status: 'aguardando', created_at: timestamp }).select().single();
         if (result.error || !result.data) throw result.error || new Error('Não foi possível cadastrar a visita.');
         createdId = result.data.id;
@@ -187,7 +192,7 @@ export default function RecepcaoPanel({ brokers, visits, queue, allowTestControl
         createdId = null;
         if (destination === 'normal' && route.referred_broker_id) {
           const { broker, split } = resolveReceptionDispatch({ ...queued.data, visit: result.data }, brokers, clock, busyIds, () =>
-            dispatchBroker(brokers, queue_type as QueueEntry['queue_type'], simSeconds, busyIds, null, preOpeningAssignee ?? route.referred_broker_id).broker,
+            dispatchBroker(brokers, queue_type, simSeconds, busyIds, null, preOpeningAssignee ?? route.referred_broker_id).broker,
           );
           if (broker && split) await claimReceptionCall(queued.data, broker, true, timestamp);
         }
@@ -524,13 +529,17 @@ export default function RecepcaoPanel({ brokers, visits, queue, allowTestControl
                 onChange={(e) => handleReasonChange(e.target.value as VisitReason)}
                 className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-amber-500 transition"
               >
-                {REASONS.filter(r => r !== 'Parceria').map((r) => (
+                {REASONS.filter(r => r !== 'Parceria' || partnershipUsesFallback || reason === 'Parceria').map((r) => (
                   <option key={r} value={r}>{r}</option>
                 ))}
               </select>
             </div>
 
-            {isParceria && (
+            {isParceria && partnershipUsesFallback && (
+              <p className="text-sm text-sky-300">Cadastre aqui os dados completos da visita de parceria.</p>
+            )}
+
+            {isParceria && !partnershipUsesFallback && (
               <div className="bg-sky-500/5 border border-sky-500/20 rounded-xl p-4 space-y-3">
                 <p className="text-sm text-sky-400">
                   <strong>Parceria:</strong> o atendimento será direcionado ao Gerente de Parcerias.
@@ -792,7 +801,7 @@ export default function RecepcaoPanel({ brokers, visits, queue, allowTestControl
               className="w-full bg-amber-500 hover:bg-amber-400 disabled:bg-slate-700 disabled:text-slate-500 text-slate-950 font-bold py-3.5 rounded-xl transition-all flex items-center justify-center gap-2"
             >
               <UserPlus className="h-5 w-5" />
-              {submitting ? 'Cadastrando…' : 'Cadastrar e enviar para fila'}
+              {submitting ? 'Cadastrando…' : 'Cadastrar visita'}
             </button>
           </form>
         </div>

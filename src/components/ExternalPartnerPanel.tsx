@@ -13,9 +13,11 @@ const inputStyle = "block w-full bg-slate-800 rounded-lg p-2 mt-1 text-white";
 export default function ExternalPartnerPanel({
   managementOnly = false,
   callsOnly = false,
+  intakeRedirected = false,
 }: {
   managementOnly?: boolean;
   callsOnly?: boolean;
+  intakeRedirected?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [rows, setRows] = useState<PartnerIntake[]>([]);
@@ -48,6 +50,7 @@ export default function ExternalPartnerPanel({
   }, []);
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (intakeRedirected) return;
     setSaving(true);
     setError("");
     try {
@@ -80,7 +83,7 @@ export default function ExternalPartnerPanel({
     <section className="bg-slate-900 border border-sky-500/30 rounded-2xl p-5 mb-6 space-y-4">
       <div className="flex justify-between gap-3">
         <h2 className="text-lg font-bold text-sky-300">Parceria externa</h2>
-        {!managementOnly && !callsOnly && (
+        {!managementOnly && !callsOnly && !intakeRedirected && (
           <button
             className="bg-sky-700 rounded-lg px-4 py-2"
             onClick={() => setOpen(!open)}
@@ -89,7 +92,8 @@ export default function ExternalPartnerPanel({
           </button>
         )}
       </div>
-      {open && (
+      {intakeRedirected && <p className="text-sm text-sky-300">Para nova visita de parceria, use o formulário da Recepção abaixo.</p>}
+      {open && !intakeRedirected && (
         <form
           onSubmit={submit}
           className="grid md:grid-cols-2 gap-4 text-sm text-slate-300"

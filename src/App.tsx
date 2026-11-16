@@ -2,7 +2,7 @@ import ShiftClosingDashboard from '@/components/ShiftClosingDashboard';
 import { resetSimulatorReport } from '@/lib/reports/reportStore';
 import OfficialClosingPanel from '@/components/OfficialClosingPanel';
 import { isPlantaoClosed } from '@/lib/reports/officialClosing';
-import { visibleDraws } from '@/lib/reception/fallbackOrchestrator';
+import { busyReceptionIds, receptionDestination, receptionRoster, visibleDraws } from '@/lib/reception/fallbackOrchestrator';
 import { dispatchGeneralWaiting } from '@/lib/reception/fallbackStore';
 import PauseAuditPanel from '@/components/PauseAuditPanel';
 import { enforcePauses, resetPauseState } from '@/lib/queue/pauseAndPartnersStore';
@@ -121,6 +121,10 @@ function AppContent() {
   }, [activeSession]);
 
   const sortedQueue = interleaveQueue(queue, brokers, activeSession?.last_called_agency ?? null);
+  const partnerIntakeRedirected = schedule.acceptingClients && receptionDestination(
+    receptionRoster(brokers, { seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate }),
+    busyReceptionIds(queue), null,
+  ) !== 'normal';
 
   async function handleReiniciar() {
     if (dbConnected !== false) return;
@@ -305,7 +309,7 @@ function AppContent() {
         {publishedDraws.afternoon && <PendingShiftQueues draw={publishedDraws.afternoon} brokers={brokers}
           title={schedule.coexistence ? 'Sorteio da tarde — fila da manhã ainda em operação' : 'Sorteio da tarde'} />}
         {view === 'auditoria' && <section className="mb-6 grid md:grid-cols-2 gap-4">{(['manha', 'tarde'] as const).filter(shift => !isExtendedShift || shift === 'manha').map(shift => <div key={shift}><h2 className="font-bold">Inscritos — {shift === 'manha' ? 'Manhã / Integral' : 'Tarde'}</h2><ul>{brokers.filter(b => !b.is_external_partner && (shift === 'manha' ? (morningDraw && [...morningDraw.viva, ...morningDraw.nobre].includes(b.id)) || b.shift === 'manha' && b.arrived_at?.startsWith(plantaoDate) : (b as Broker & { afternoon_enrolled_at?: string }).afternoon_enrolled_at?.startsWith(plantaoDate) || b.shift === 'tarde' && b.arrived_at)).map(b => <li key={b.id}>{b.operational_name} · {b.agency}</li>)}</ul></div>)}</section>}
-        {view === 'recepcao' && !closed && <><ExternalPartnerPanel /><RecepcaoPanel brokers={brokers} visits={visits} queue={queue}
+        {view === 'recepcao' && !closed && <><ExternalPartnerPanel intakeRedirected={partnerIntakeRedirected} /><RecepcaoPanel brokers={brokers} visits={visits} queue={queue}
           allowTestControls={dbConnected === false || import.meta.env.VITE_PLANTAO_TEST_DATABASE === 'true'} quickLog={quickLog} setQuickLog={setQuickLog} /></>}
         {view === 'chamadas' && !closed && <><ExternalPartnerPanel callsOnly /><ChamadasPanel queue={queue} brokers={brokers} /></>}
         {view === 'corretor' && !closed && <><CorretorPanel brokers={brokers} /><ExternalPartnerPanel managementOnly /></>}
