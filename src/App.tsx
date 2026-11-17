@@ -7,8 +7,8 @@ import PauseAuditPanel from '@/components/PauseAuditPanel';
 import { enforcePauses } from '@/lib/queue/pauseAndPartnersStore';
 import { onlyOwn } from '@/lib/queue/pauseAndPartners';
 import ExternalPartnerPanel from '@/components/ExternalPartnerPanel';
-import { advanceSchedule } from '@/lib/queue/shiftScheduleStore';
-import { scheduleAt, type ShiftDraw } from '@/lib/queue/shiftSchedule';
+import { advanceSchedule, hasDrawParticipants } from '@/lib/queue/shiftScheduleStore';
+import { scheduleAt, type ScheduledBroker, type ShiftDraw } from '@/lib/queue/shiftSchedule';
 import PendingShiftQueues from '@/components/PendingShiftQueues';
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { Building2, DoorOpen, Tv, Users, ListOrdered, Zap, Clock, Plus, Shuffle, ClipboardList, RefreshCw, X, Trophy, Calendar, Sun, Moon, ArrowRight, Home, Database, TriangleAlert as AlertTriangle } from 'lucide-react';
@@ -33,6 +33,7 @@ function AppContent() {
   const closed = closedDay === plantaoDate;
   const publishedDraws = visibleDraws(simSeconds, isExtendedShift, morningDraw, afternoonDraw);
   const scheduleRunning = useRef(false);
+  const pendingSchedule = useRef<(() => Promise<void>) | null>(null);
   const [view, setView] = useState<View>('recepcao');
   const [brokers, setBrokers] = useState<Broker[]>([]);
   const [visits, setVisits] = useState<Visit[]>([]);
@@ -46,6 +47,9 @@ function AppContent() {
 
   const [loadError, setLoadError] = useState<string | null>(null);
   const [dbConnected, setDbConnected] = useState<boolean | null>(null);
+  // React to enrollment changes without re-running on every polling array instance.
+  const enrollmentVersion = JSON.stringify(brokers.map(b => [b.id, b.shift, b.presence_status,
+    b.arrived_at, (b as ScheduledBroker).afternoon_enrolled_at]));
 
   useEffect(() => { dbReady.then((isReal) => setDbConnected(isReal)); }, []);
 
@@ -71,8 +75,10 @@ function AppContent() {
     setActiveSession(data.activeSession);
     const draws = await supabase.from('plantao_sessions').select('*').eq('plantao_date', plantaoDate);
     if (draws.error) { setLoadError('Não foi possível carregar os sorteios.'); setLoading(false); return; }
-    setMorningDraw(draws.data?.find((e: { id: string }) => e.id === `schedule_${plantaoDate}_morning`)?.schedule_data ?? null);
-    setAfternoonDraw(draws.data?.find((e: { id: string }) => e.id === `schedule_${plantaoDate}_afternoon`)?.schedule_data ?? null);
+    const morning = draws.data?.find((e: { id: string }) => e.id === `schedule_${plantaoDate}_morning`)?.schedule_data;
+    const afternoon = draws.data?.find((e: { id: string }) => e.id === `schedule_${plantaoDate}_afternoon`)?.schedule_data;
+    setMorningDraw(hasDrawParticipants(morning) ? morning : null);
+    setAfternoonDraw(hasDrawParticipants(afternoon) ? afternoon : null);
     setLoading(false);
     return dayClosed ? undefined : data;
   }, [plantaoDate]);
@@ -97,23 +103,39 @@ function AppContent() {
   }, [load]);
 
   useEffect(() => {
-    if (loading || closed || maintenanceRunning.current || scheduleRunning.current) return;
+    if (loading || closed || maintenanceRunning.current) { pendingSchedule.current = null; return; }
+    const clock = { seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate };
+    const at = new Date(`${plantaoDate}T${clockDisplay}-03:00`).toISOString();
+    pendingSchedule.current = async () => {
+      await advanceSchedule(clock, { deferClosing: true });
+      await enforcePauses({ at, shift: currentShift });
+      const live = await load();
+      if (live && await dispatchGeneralWaiting(live.queue, live.brokers, clock, at)) await load();
+    };
+    if (scheduleRunning.current) return;
     scheduleRunning.current = true;
-    scheduleTask.current = advanceSchedule({ seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate }, { deferClosing: true })
-      .then(async () => {
-        const at = getCurrentTime().toISOString();
-        await enforcePauses({ at, shift: currentShift });
-        const live = await load();
-        if (live && await dispatchGeneralWaiting(live.queue, live.brokers,
-          { seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate }, at)) await load();
-      })
-      .catch(error => setLoadError(`Erro na agenda do plantão: ${error instanceof Error ? error.message : String(error)}`))
-      .finally(() => { scheduleRunning.current = false; });
-  }, [simSeconds, isExtendedShift, plantaoDate, loading, closed, load, getCurrentTime, currentShift]);
+    scheduleTask.current = (async () => {
+      // Coalesce clock jumps while a request is in flight, then process the latest
+      // clock immediately. A manual jump must not depend on the next real tick.
+      while (pendingSchedule.current && !maintenanceRunning.current) {
+        const task = pendingSchedule.current;
+        pendingSchedule.current = null;
+        try { await task(); }
+        catch (error) { setLoadError(`Erro na agenda do plantão: ${error instanceof Error ? error.message : String(error)}`); }
+      }
+    })().finally(() => { scheduleRunning.current = false; });
+  }, [simSeconds, clockDisplay, isExtendedShift, plantaoDate, loading, closed, load, currentShift, enrollmentVersion, maintenanceVersion]);
+
+  useEffect(() => () => { pendingSchedule.current = null; }, []);
 
   useEffect(() => {
     const session = activeSession as (PlantaoSession & { schedule_data?: ShiftDraw }) | null;
-    if (!session?.schedule_data || localStorage.getItem('schedule_rotation_session') === session.id) return;
+    if (!session?.schedule_data) return;
+    if (!hasDrawParticipants(session.schedule_data)) {
+      if (localStorage.getItem('schedule_rotation_session') === session.id) localStorage.removeItem('schedule_rotation_session');
+      return;
+    }
+    if (localStorage.getItem('schedule_rotation_session') === session.id) return;
     const first = session.schedule_data.firstAgency;
     setCompanyDrawOrder([first, first === 'Viva Imóveis' ? 'Casa Nobre' : 'Viva Imóveis']);
     setCompanyRotationIndex(0);
@@ -129,6 +151,7 @@ function AppContent() {
   async function runMaintenance(work: () => Promise<void>) {
     if (maintenanceRunning.current) return;
     maintenanceRunning.current = true;
+    pendingSchedule.current = null;
     try {
       await scheduleTask.current;
       await work();

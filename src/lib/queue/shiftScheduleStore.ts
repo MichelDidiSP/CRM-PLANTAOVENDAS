@@ -15,6 +15,10 @@ type Event = {
   shift: "manha" | "tarde";
   status: string;
 };
+// Empty schedule markers can predate TESTE enrollment. They are not a draw.
+export function hasDrawParticipants(draw: ShiftDraw | null | undefined): boolean {
+  return Boolean(draw && (draw.viva.length || draw.nobre.length));
+}
 async function checked(query: PromiseLike<{ error: unknown }>) {
   const result = await query;
   if (result.error) throw result.error;
@@ -55,12 +59,17 @@ async function applyEvent(
   }
   // The in-memory simulator uses the same decisions as the database transaction.
   const id = `schedule_${clock.date}_${action}`;
-  const { data: existing } = await supabase
+  const { data: existing, error } = await supabase
     .from("plantao_sessions")
-    .select("id")
+    .select("*")
     .eq("id", id)
     .maybeSingle();
-  if (existing) return;
+  if (error) throw error;
+  if (existing) {
+    if (hasDrawParticipants(existing.schedule_data) || !hasDrawParticipants(draw)) return;
+    // Only replace an empty marker; never redraw an already published queue.
+    await checked(supabase.from("plantao_sessions").delete().eq("id", id));
+  }
   if (action === "morning_activate" && draw) {
     for (const b of brokers
       .filter(
@@ -125,6 +134,9 @@ async function applyEvent(
         .eq("shift", "manha")
         .eq("queue_status", "aguardando"),
     );
+  }
+  if (["morning_activate", "activate"].includes(action) && draw) {
+    // Match the database: only the newly activated session remains active.
     await checked(
       supabase
         .from("plantao_sessions")
@@ -169,10 +181,13 @@ export async function advanceSchedule(
   const events = (sessions.data ?? []) as Event[];
   const has = (action: string) =>
     events.some((e) => e.id === `schedule_${clock.date}_${action}`);
+  const drawn = (action: string) => hasDrawParticipants(
+    events.find((e) => e.id === `schedule_${clock.date}_${action}`)?.schedule_data,
+  );
   let morning =
     events.find((e) => e.id === `schedule_${clock.date}_morning`)
       ?.schedule_data ?? null;
-  if (state.morningDrawDue && !has("morning")) {
+  if (state.morningDrawDue && !drawn("morning")) {
     const eligible = brokers.filter(
       (b) =>
         !b.is_external_partner &&
@@ -193,23 +208,28 @@ export async function advanceSchedule(
       (b.agency === "Viva Imóveis" ? draw.viva : draw.nobre).push(b.id);
       draw.inverse.push(b.id);
     }
-    morning = draw;
-    await applyEvent(clock, "morning", draw, brokers);
+    if (eligible.length || !has("morning")) {
+      morning = draw;
+      await applyEvent(clock, "morning", draw, brokers);
+    }
   }
-  if (clock.seconds >= 9 * 3600 && !has("morning_activate") && morning)
+  if (clock.seconds >= 9 * 3600 && morning &&
+      (!has("morning_activate") || (hasDrawParticipants(morning) && !drawn("morning_activate"))))
     await applyEvent(clock, "morning_activate", morning, brokers);
   let afternoon =
     events.find((e) => e.id === `schedule_${clock.date}_afternoon`)
       ?.schedule_data ?? null;
-  if (state.afternoonDrawDue && !has("afternoon")) {
-    afternoon = makeDraw(
-      brokers.filter(
-        (b) => !b.is_external_partner && enrolledForAfternoon(b, clock.date),
-      ),
+  if (state.afternoonDrawDue && !drawn("afternoon")) {
+    const eligible = brokers.filter(
+      (b) => !b.is_external_partner && enrolledForAfternoon(b, clock.date),
     );
-    await applyEvent(clock, "afternoon", afternoon, brokers);
+    if (eligible.length || !has("afternoon")) {
+      afternoon = makeDraw(eligible);
+      await applyEvent(clock, "afternoon", afternoon, brokers);
+    }
   }
-  if (state.afternoonActive && !has("activate") && afternoon)
+  if (state.afternoonActive && afternoon &&
+      (!has("activate") || (hasDrawParticipants(afternoon) && !drawn("activate"))))
     await applyEvent(clock, "activate", afternoon, brokers);
   if (state.closed && !deferClosing && !has("close"))
     await applyEvent(clock, "close", null, brokers);
