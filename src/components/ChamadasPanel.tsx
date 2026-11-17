@@ -1,3 +1,5 @@
+import { actOnPause } from '@/lib/queue/pauseAndPartnersStore';
+import { getPlantaoTime, afterPlantaoDelay, plantaoClockParts } from '@/lib/plantaoClock';
 import { firstName, attendanceTrace } from '@/lib/reception/intake';
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { Volume2, VolumeX, Timer, Users, Building2, Zap, Chrome as Home, ArrowLeftRight, TriangleAlert as AlertTriangle, History } from 'lucide-react';
@@ -14,22 +16,24 @@ type Props = {
 };
 
 export default function ChamadasPanel({ queue, brokers }: Props) {
-  const { callDuration, testMode, simSeconds, plantaoDate, isExtendedShift } = useSim();
+  const { callDuration, testMode, simSeconds, plantaoDate, isExtendedShift, currentShift } = useSim();
   const [currentCall, setCurrentCall] = useState<QueueEntry | null>(null);
-  const [remaining, setRemaining] = useState(callDuration);
   const [attempts, setAttempts] = useState(0);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [calling, setCalling] = useState(false);
   const [autoRecallNotice, setAutoRecallNotice] = useState<string | null>(null);
-  const intervalRef = useRef<number | undefined>(undefined);
+  const callStartedAt = useRef(0);
+  const recallCancel = useRef<(() => void) | undefined>();
+  useEffect(() => () => recallCancel.current?.(), []);
+  const remaining = calling ? Math.max(0, callDuration - Math.floor((getPlantaoTime().getTime() - callStartedAt.current) / 1000)) : callDuration;
   const audioCtxRef = useRef<AudioContext | null>(null);
   const timeoutFiredRef = useRef(false);
 
   useEffect(() => {
     const calling_entry = queue.find((e) => e.queue_status === 'chamando');
-    if (calling_entry && (!currentCall || currentCall.id !== calling_entry.id)) {
+    if (calling_entry && (!currentCall || currentCall.id !== calling_entry.id || currentCall.called_at !== calling_entry.called_at || currentCall.attempts !== calling_entry.attempts)) {
       setCurrentCall(calling_entry);
-      setRemaining(callDuration);
+      callStartedAt.current = calling_entry.called_at ? Date.parse(calling_entry.called_at) : getPlantaoTime().getTime();
       setAttempts(calling_entry.attempts);
       setCalling(true);
       setAutoRecallNotice(null);
@@ -43,37 +47,21 @@ export default function ChamadasPanel({ queue, brokers }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queue, currentCall]);
 
-  useEffect(() => {
-    if (calling && remaining > 0) {
-      intervalRef.current = window.setInterval(() => {
-        setRemaining((r) => {
-          if (r <= 1) {
-            window.clearInterval(intervalRef.current);
-            return 0;
-          }
-          return r - 1;
-        });
-      }, 1000);
-      return () => {
-        if (intervalRef.current) window.clearInterval(intervalRef.current);
-      };
-    }
-  }, [calling, remaining]);
-
   const handleTimeout = useCallback(async () => {
     if (!currentCall || timeoutFiredRef.current) return;
     timeoutFiredRef.current = true;
 
-    // Pausar o corretor que não compareceu
+    // Enter the official continuous-pause flow using the same operational clock.
+    const at = getPlantaoTime().toISOString();
     if (currentCall.broker_id) {
       await supabase
         .from('brokers')
         .update({
-          presence_status: 'pausa',
           attendance_status: 'livre',
-          last_status_update: new Date().toISOString(),
+          last_status_update: at,
         })
         .eq('id', currentCall.broker_id);
+      await actOnPause(currentCall.broker_id, 'pause', { at, shift: currentShift });
     }
 
     const wasLastAttempt = currentCall.attempts >= 3;
@@ -85,7 +73,7 @@ export default function ChamadasPanel({ queue, brokers }: Props) {
         queue_status: 'aguardando',
         broker_id: null,
         attempts: wasLastAttempt ? 0 : currentCall.attempts,
-        updated_at: new Date().toISOString(),
+        updated_at: getPlantaoTime().toISOString(),
       })
       .eq('id', currentCall.id);
 
@@ -100,7 +88,9 @@ export default function ChamadasPanel({ queue, brokers }: Props) {
     );
 
     // Auto-recall: dispara nova chamada para o próximo corretor da respectiva fila
-    setTimeout(async () => {
+    recallCancel.current?.();
+    recallCancel.current = afterPlantaoDelay(async () => {
+      const { simSeconds, plantaoDate } = plantaoClockParts(getPlantaoTime());
       // Recarregar a entrada atualizada do queue
       const { data: refreshedQueue } = await supabase
         .from('queue_entries')
@@ -120,7 +110,7 @@ export default function ChamadasPanel({ queue, brokers }: Props) {
             busy, null, entry.visit?.referred_broker_id ?? null).broker,
         );
         if (broker) {
-          try { await claimReceptionCall(entry, broker, split, new Date().toISOString()); }
+          try { await claimReceptionCall(entry, broker, split, getPlantaoTime().toISOString()); }
           catch { setAutoRecallNotice('Não foi possível chamar o corretor. Cliente permanece aguardando.'); }
         }
         return;
@@ -153,8 +143,8 @@ export default function ChamadasPanel({ queue, brokers }: Props) {
           queue_status: 'chamando',
           broker_id: nextBrokerId,
           attempts: (entry.attempts ?? 0) + 1,
-          called_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
+          called_at: getPlantaoTime().toISOString(),
+          updated_at: getPlantaoTime().toISOString(),
         })
         .eq('id', entry.id);
 
@@ -164,10 +154,10 @@ export default function ChamadasPanel({ queue, brokers }: Props) {
 
       if (nextBrokerId) {
         const markServed = entry.queue_type === 'geral' ? markStandardBrokerInService : markBrokerInService;
-        await markServed(nextBrokerId, new Date().toISOString());
+        await markServed(nextBrokerId, getPlantaoTime().toISOString());
       }
     }, 1500);
-  }, [currentCall, brokers, queue, simSeconds, plantaoDate, isExtendedShift]);
+  }, [currentCall, brokers, queue, simSeconds, plantaoDate, isExtendedShift, currentShift]);
 
   // When remaining hits 0, auto-trigger transbordo
   useEffect(() => {

@@ -1,3 +1,4 @@
+import { getPlantaoTime } from '@/lib/plantaoClock';
 import { onlyOwn, distributionBrokers, restrictedOwner } from './queue/pauseAndPartners';
 import { getScheduleClock, scheduleAt, preOpeningBroker, activeBrokers } from './queue/shiftSchedule';
 import { firstFree, reverseCoverage, meritCandidates, completionPatch } from './queue/coreDistribution';
@@ -336,7 +337,7 @@ export async function executeSorteio(brokers: Broker[], simSeconds: number, shif
 
   await supabase
     .from('plantao_sessions')
-    .update({ status: 'ended', ended_at: new Date().toISOString() })
+    .update({ status: 'ended', ended_at: getPlantaoTime().toISOString() })
     .neq('id', sessionId);
 
   return {
@@ -365,14 +366,14 @@ export async function reiniciarPlantao(brokers: Broker[]): Promise<void> {
         arrived_at: null,
         shift: null,
         afternoon_reserved: false,
-        last_status_update: new Date().toISOString(),
+        last_status_update: getPlantaoTime().toISOString(),
       })
       .eq('id', broker.id);
   }
 
   await supabase
     .from('plantao_sessions')
-    .update({ status: 'ended', ended_at: new Date().toISOString() })
+    .update({ status: 'ended', ended_at: getPlantaoTime().toISOString() })
     .eq('status', 'active');
 
   await supabase
@@ -388,7 +389,7 @@ export async function reiniciarPlantao(brokers: Broker[]): Promise<void> {
 export async function transitionToAfternoon(brokers: Broker[]): Promise<void> {
   await supabase
     .from('plantao_sessions')
-    .update({ status: 'ended', ended_at: new Date().toISOString() })
+    .update({ status: 'ended', ended_at: getPlantaoTime().toISOString() })
     .eq('shift', 'manha')
     .eq('status', 'active');
 
@@ -417,7 +418,7 @@ export async function transitionToAfternoon(brokers: Broker[]): Promise<void> {
           inverse_order: null,
           shift: null,
           afternoon_reserved: false,
-          last_status_update: new Date().toISOString(),
+          last_status_update: getPlantaoTime().toISOString(),
         })
         .eq('id', broker.id);
     }
@@ -836,7 +837,7 @@ export async function moveBrokerToEndOfDirectQueue(brokerId: string, brokers: Br
     .from('brokers')
     .update({
       sorteio_order: maxDirect + 1,
-      last_status_update: new Date().toISOString(),
+      last_status_update: getPlantaoTime().toISOString(),
     })
     .eq('id', brokerId);
 }
@@ -855,7 +856,7 @@ export async function moveBrokerToEndOfInverseQueue(brokerId: string, brokers: B
     .from('brokers')
     .update({
       inverse_order: maxInverse + 1,
-      last_status_update: new Date().toISOString(),
+      last_status_update: getPlantaoTime().toISOString(),
     })
     .eq('id', brokerId);
 }

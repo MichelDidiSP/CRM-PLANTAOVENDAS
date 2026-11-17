@@ -4,9 +4,7 @@ import { createMockClient } from './mockClient';
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL ?? '';
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY ?? '';
 
-const localSimulation = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('simulacao') === '1';
-
-const hasCredentials = !localSimulation && supabaseUrl.length > 0 && supabaseUrl.startsWith('http') && supabaseAnonKey.length > 0;
+const hasCredentials = supabaseUrl.length > 0 && supabaseUrl.startsWith('http') && supabaseAnonKey.length > 0;
 
 const mockClient = createMockClient();
 const realClient: SupabaseClient | null = hasCredentials

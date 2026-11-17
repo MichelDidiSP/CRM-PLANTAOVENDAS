@@ -1,3 +1,6 @@
+import { actOnPause } from '@/lib/queue/pauseAndPartnersStore';
+import { useEffect, useRef } from 'react';
+import { getPlantaoTime, afterPlantaoDelay } from '@/lib/plantaoClock';
 import { firstName, attendanceTrace } from '@/lib/reception/intake';
 import { Bell, CircleCheck as CheckCircle2, Eye, ArrowLeftRight, Clock, TriangleAlert as AlertTriangle, UserCheck, History, Chrome as Home, Repeat, Sun, Moon } from 'lucide-react';
 import { supabase, type Broker, type QueueEntry, type Agency } from '@/lib/supabase';
@@ -14,6 +17,8 @@ type Props = {
 
 export default function FilaPanel({ queue, brokers, allQueue }: Props) {
   const { isPreSorteio, currentShift, simSeconds, isExtendedShift, plantaoDate } = useSim();
+  const recallCancel = useRef<(() => void) | undefined>();
+  useEffect(() => () => recallCancel.current?.(), []);
   const waiting = queue.filter((e) => e.queue_status === 'aguardando');
   const calling = allQueue.filter((e) => e.queue_status === 'chamando');
   const inAttendance = allQueue.filter((e) => e.queue_status === 'em_atendimento');
@@ -44,14 +49,14 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
     const attempts = entry.attempts + 1;
     await supabase
       .from('queue_entries')
-      .update({ queue_status: 'chamando', broker_id: brokerId, attempts, called_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+      .update({ queue_status: 'chamando', broker_id: brokerId, attempts, called_at: getPlantaoTime().toISOString(), updated_at: getPlantaoTime().toISOString() })
       .eq('id', entry.id);
     if (entry.visit_id) {
       await supabase.from('visits').update({ status: 'aguardando_chamada' }).eq('id', entry.visit_id);
     }
     if (brokerId) {
       const markServed = isStandard ? markStandardBrokerInService : markBrokerInService;
-      await markServed(brokerId, new Date().toISOString());
+      await markServed(brokerId, getPlantaoTime().toISOString());
     }
   }
 
@@ -70,7 +75,7 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
     );
     if (!broker) return;
     if (split || entry.reception_waiting) {
-      await claimReceptionCall(entry, broker, split, new Date().toISOString(), !referredBrokerId && entry.queue_type === 'geral');
+      await claimReceptionCall(entry, broker, split, getPlantaoTime().toISOString(), !referredBrokerId && entry.queue_type === 'geral');
       return;
     }
     if (entry.visit?.visit_reason === 'Primeira visita') await markMeritReturns(brokers, broker, allQueue);
@@ -113,12 +118,12 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
   }
 
   async function confirmPresence(entry: QueueEntry) {
-    await supabase.from('queue_entries').update({ queue_status: 'em_atendimento', updated_at: new Date().toISOString() }).eq('id', entry.id);
+    await supabase.from('queue_entries').update({ queue_status: 'em_atendimento', updated_at: getPlantaoTime().toISOString() }).eq('id', entry.id);
     if (entry.visit_id) {
       await supabase.from('visits').update({ status: 'em_atendimento' }).eq('id', entry.visit_id);
     }
     if (entry.broker_id) {
-      await supabase.from('brokers').update({ attendance_status: 'em_atendimento', last_status_update: new Date().toISOString() }).eq('id', entry.broker_id);
+      await supabase.from('brokers').update({ attendance_status: 'em_atendimento', last_status_update: getPlantaoTime().toISOString() }).eq('id', entry.broker_id);
     }
   }
 
@@ -127,22 +132,25 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
       // 3 strikes → broker is paused (not just pausa), next broker from same queue
       const isLastAttempt = entry.attempts >= 3;
       if (isLastAttempt) {
-        await supabase.from('brokers').update({ presence_status: 'pausa', attendance_status: 'livre', last_status_update: new Date().toISOString() }).eq('id', entry.broker_id);
+        const at = getPlantaoTime().toISOString();
+        await supabase.from('brokers').update({ attendance_status: 'livre', last_status_update: at }).eq('id', entry.broker_id);
+        await actOnPause(entry.broker_id, 'pause', { at, shift: currentShift });
       } else {
-        await supabase.from('brokers').update({ attendance_status: 'livre', last_status_update: new Date().toISOString() }).eq('id', entry.broker_id);
+        await supabase.from('brokers').update({ attendance_status: 'livre', last_status_update: getPlantaoTime().toISOString() }).eq('id', entry.broker_id);
       }
     }
     const wasLastAttempt = entry.attempts >= 3;
     // Client stays at top of their queue; reset attempts only if last (new broker gets fresh 3)
     await supabase
       .from('queue_entries')
-      .update({ queue_status: 'aguardando', broker_id: null, attempts: wasLastAttempt ? 0 : entry.attempts, updated_at: new Date().toISOString() })
+      .update({ queue_status: 'aguardando', broker_id: null, attempts: wasLastAttempt ? 0 : entry.attempts, updated_at: getPlantaoTime().toISOString() })
       .eq('id', entry.id);
     if (entry.visit_id) {
       await supabase.from('visits').update({ status: 'aguardando' }).eq('id', entry.visit_id);
     }
     // Auto-recall: next broker from the SAME queue type (direta or inversa)
-    setTimeout(() => autoRecall(entry, wasLastAttempt), 500);
+    recallCancel.current?.();
+    recallCancel.current = afterPlantaoDelay(() => autoRecall(entry, wasLastAttempt), 500);
   }
 
   async function autoRecall(entry: QueueEntry, _wasLast: boolean) {
@@ -158,16 +166,16 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
   }
 
   async function conclude(entry: QueueEntry) {
-    await concludeAttendance(entry, new Date().toISOString());
+    await concludeAttendance(entry, getPlantaoTime().toISOString());
   }
 
   async function cancelCall(entry: QueueEntry) {
-    await supabase.from('queue_entries').update({ queue_status: 'aguardando', broker_id: null, updated_at: new Date().toISOString() }).eq('id', entry.id);
+    await supabase.from('queue_entries').update({ queue_status: 'aguardando', broker_id: null, updated_at: getPlantaoTime().toISOString() }).eq('id', entry.id);
     if (entry.visit_id) {
       await supabase.from('visits').update({ status: 'aguardando' }).eq('id', entry.visit_id);
     }
     if (entry.broker_id) {
-      await supabase.from('brokers').update({ attendance_status: 'livre', last_status_update: new Date().toISOString() }).eq('id', entry.broker_id);
+      await supabase.from('brokers').update({ attendance_status: 'livre', last_status_update: getPlantaoTime().toISOString() }).eq('id', entry.broker_id);
     }
   }
 

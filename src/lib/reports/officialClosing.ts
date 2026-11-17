@@ -1,3 +1,4 @@
+import { getPlantaoTime } from '@/lib/plantaoClock';
 import { dbReady, supabase } from '../supabase';
 import { loadReportRows } from './reportStore';
 import { businessDate, shiftClosingReport, type ReportRow } from './shiftClosingReport';
@@ -79,7 +80,7 @@ export async function closePlantao(date: string): Promise<ClosingSummary> {
         phone: reservation?.customer_phone ?? intakeDetails?.phone ?? null, media: intakeDetails?.media_channel ?? null, type: 'Parceria', broker: row.partner_name };
     }),
   ];
-  const summary: ClosingSummary = { date, closed_at: new Date().toISOString(), rows: facts, recipients: [] };
+  const summary: ClosingSummary = { date, closed_at: getPlantaoTime().toISOString(), rows: facts, recipients: [] };
   const result = await supabase.from('plantao_daily_closures').insert({ ...summary, customers });
   if (result.error) throw new Error(result.error.message);
   await supabase.from('plantao_sessions').update({ status: 'ended', ended_at: summary.closed_at })

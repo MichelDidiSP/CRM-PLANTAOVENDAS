@@ -1,24 +1,23 @@
-import SimulationToolbar from '@/components/SimulationToolbar';
 import ShiftClosingDashboard from '@/components/ShiftClosingDashboard';
-import { loadReportRows } from '@/lib/reports/reportStore';
 import OfficialClosingPanel from '@/components/OfficialClosingPanel';
 import { isPlantaoClosed } from '@/lib/reports/officialClosing';
 import { busyReceptionIds, receptionDestination, receptionRoster, visibleDraws } from '@/lib/reception/fallbackOrchestrator';
 import { dispatchGeneralWaiting } from '@/lib/reception/fallbackStore';
 import PauseAuditPanel from '@/components/PauseAuditPanel';
-import { enforcePauses, resetPauseState } from '@/lib/queue/pauseAndPartnersStore';
+import { enforcePauses } from '@/lib/queue/pauseAndPartnersStore';
 import { onlyOwn } from '@/lib/queue/pauseAndPartners';
 import ExternalPartnerPanel from '@/components/ExternalPartnerPanel';
 import { advanceSchedule } from '@/lib/queue/shiftScheduleStore';
 import { scheduleAt, type ShiftDraw } from '@/lib/queue/shiftSchedule';
 import PendingShiftQueues from '@/components/PendingShiftQueues';
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { Building2, DoorOpen, Tv, Users, ListOrdered, Clock, Shuffle, ClipboardList, RefreshCw, X, Trophy, Home, Database, TriangleAlert as AlertTriangle } from 'lucide-react';
+import { Building2, DoorOpen, Tv, Users, ListOrdered, Zap, Clock, Plus, Shuffle, ClipboardList, RefreshCw, X, Trophy, Calendar, Sun, Moon, ArrowRight, Home, Database, TriangleAlert as AlertTriangle } from 'lucide-react';
 import { supabase, dbReady, type Broker, type QueueEntry, type Visit, type PlantaoSession } from '@/lib/supabase';
-import { setCompanyDrawOrder, setCompanyRotationIndex, fetchAll, interleaveQueue, reiniciarPlantao, isLateForSort } from '@/lib/queueEngine';
+import { setCompanyDrawOrder, setCompanyRotationIndex, fetchAll, interleaveQueue, isLateForSort } from '@/lib/queueEngine';
 import { SimProvider, useSim } from '@/lib/simContext';
 
-import RecepcaoPanel, { type QuickEntryLog } from '@/components/RecepcaoPanel';
+import RecepcaoPanel from '@/components/RecepcaoPanel';
+import TestModule from '@/modules/teste/TestModule';
 import ChamadasPanel from '@/components/ChamadasPanel';
 import CorretorPanel from '@/components/CorretorPanel';
 import FilaPanel from '@/components/ScheduledFilaPanel';
@@ -26,7 +25,7 @@ import FilaPanel from '@/components/ScheduledFilaPanel';
 type View = 'recepcao' | 'chamadas' | 'corretor' | 'fila' | 'auditoria';
 
 function AppContent() {
-  const { testMode, sorteioTriggered, resetClock, simSeconds, currentShift, plantaoDate, isPreSorteio, isCheckinOpen, isAfternoonActive, isMorningQueueActive, isExtendedShift, getCurrentTime } = useSim();
+  const { clockDisplay, testMode, sorteioTriggered, simSeconds, currentShift, isWeekday, plantaoDate, isPreSorteio, isCheckinOpen, isAtendimentoActive, isShiftTransition, isAfternoonActive, isMorningQueueActive, isExtendedShift, getCurrentTime } = useSim();
   const schedule = scheduleAt({ seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate });
   const [morningDraw, setMorningDraw] = useState<ShiftDraw | null>(null);
   const [afternoonDraw, setAfternoonDraw] = useState<ShiftDraw | null>(null);
@@ -34,19 +33,15 @@ function AppContent() {
   const closed = closedDay === plantaoDate;
   const publishedDraws = visibleDraws(simSeconds, isExtendedShift, morningDraw, afternoonDraw);
   const scheduleRunning = useRef(false);
-  const scheduleTask = useRef<Promise<void> | null>(null);
-  const resetting = useRef(false);
-  const [simulationTarget, setSimulationTarget] = useState<HTMLDivElement | null>(null);
   const [view, setView] = useState<View>('recepcao');
   const [brokers, setBrokers] = useState<Broker[]>([]);
   const [visits, setVisits] = useState<Visit[]>([]);
   const [queue, setQueue] = useState<QueueEntry[]>([]);
   const [activeSession, setActiveSession] = useState<PlantaoSession | null>(null);
   const [loading, setLoading] = useState(true);
-  const [reiniciarDialog, setReiniciarDialog] = useState(false);
-  const [quickLog, setQuickLog] = useState<QuickEntryLog[]>([]);
-  const [simulationRun, setSimulationRun] = useState(0);
-  const [reiniciando, setReiniciando] = useState(false);
+  const [maintenanceVersion, setMaintenanceVersion] = useState(0);
+  const maintenanceRunning = useRef(false);
+  const scheduleTask = useRef<Promise<void> | null>(null);
   const pollRef = useRef<number | undefined>(undefined);
 
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -102,7 +97,7 @@ function AppContent() {
   }, [load]);
 
   useEffect(() => {
-    if (loading || closed || resetting.current || scheduleRunning.current) return;
+    if (loading || closed || maintenanceRunning.current || scheduleRunning.current) return;
     scheduleRunning.current = true;
     scheduleTask.current = advanceSchedule({ seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate }, { deferClosing: true })
       .then(async () => {
@@ -131,28 +126,15 @@ function AppContent() {
     busyReceptionIds(queue), null,
   ) !== 'normal';
 
-  async function handleReiniciar() {
-    if (dbConnected !== false || resetting.current) return;
-    resetting.current = true;
-    setReiniciando(true);
+  async function runMaintenance(work: () => Promise<void>) {
+    if (maintenanceRunning.current) return;
+    maintenanceRunning.current = true;
     try {
       await scheduleTask.current;
-      // Capture quantitative facts before the existing simulator reset removes its queues.
-      await loadReportRows({ period: 'day', date: plantaoDate, shift: currentShift });
-      await resetPauseState();
-      await reiniciarPlantao(brokers);
-      await supabase.from('plantao_daily_closures').delete().eq('date', plantaoDate);
-      setQuickLog([]);
-      setSimulationRun(value => value + 1);
-      resetClock();
+      await work();
       await load();
-      setReiniciarDialog(false);
-    } catch (error) {
-      setLoadError(error instanceof Error ? error.message : 'Não foi possível reiniciar o teste.');
-    } finally {
-      resetting.current = false;
-      setReiniciando(false);
-    }
+      setMaintenanceVersion(value => value + 1);
+    } finally { maintenanceRunning.current = false; }
   }
 
   const navItems: { id: View; label: string; icon: React.ReactNode }[] = [
@@ -163,18 +145,12 @@ function AppContent() {
     { id: 'auditoria', label: 'Auditoria', icon: <ClipboardList className="h-5 w-5" /> },
   ];
 
-  const simulationToolbar = <SimulationToolbar localSimulation={dbConnected === false}
-    ready={!loading} resetting={reiniciando} onReset={() => setReiniciarDialog(true)} quickControlsRef={setSimulationTarget} />;
-
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-950 text-slate-100">
-        {simulationToolbar}
-        <div className="flex min-h-[50vh] items-center justify-center">
-          <div className="text-center">
-            <div className="inline-block h-8 w-8 animate-spin rounded-full border-2 border-amber-400 border-t-transparent mb-4" />
-            <div className="text-slate-400 text-lg">A carregar plantão…</div>
-          </div>
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <div className="text-center">
+          <div className="inline-block h-8 w-8 animate-spin rounded-full border-2 border-amber-400 border-t-transparent mb-4" />
+          <div className="text-slate-400 text-lg">A carregar plantão…</div>
         </div>
       </div>
     );
@@ -182,26 +158,25 @@ function AppContent() {
 
   if (loadError && brokers.length === 0) {
     return (
-      <div className="min-h-screen bg-slate-950 text-slate-100">
-        {simulationToolbar}
-        <div className="flex min-h-[50vh] items-center justify-center">
-          <div className="text-center max-w-md mx-4">
-            <div className="bg-red-500/10 border border-red-500/30 rounded-2xl p-8">
-              <h2 className="text-xl font-bold text-red-400 mb-2">Erro de conexão</h2>
-              <p className="text-slate-400 text-sm mb-4">{loadError}</p>
-              <button onClick={() => { setLoading(true); load(); }} className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold px-6 py-2.5 rounded-xl transition">
-                Tentar novamente
-              </button>
-            </div>
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <div className="text-center max-w-md mx-4">
+          <div className="bg-red-500/10 border border-red-500/30 rounded-2xl p-8">
+            <h2 className="text-xl font-bold text-red-400 mb-2">Erro de conexão</h2>
+            <p className="text-slate-400 text-sm mb-4">{loadError}</p>
+            <button onClick={() => { setLoading(true); load(); }} className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold px-6 py-2.5 rounded-xl transition">
+              Tentar novamente
+            </button>
           </div>
         </div>
       </div>
     );
   }
 
+  const shiftLabel = currentShift === 'manha' ? 'Manhã' : 'Tarde';
+  const shiftIcon = currentShift === 'manha' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />;
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
-      {simulationToolbar}
       <header className="bg-slate-900/80 backdrop-blur border-b border-slate-800 sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6">
           <div className="flex flex-col gap-2 py-2">
@@ -214,6 +189,11 @@ function AppContent() {
               </div>
             </div>
 
+            <div className="flex items-center gap-3 py-2 text-sm text-slate-300">
+              <Clock className="h-5 w-5 text-amber-300" />
+              <output aria-label="Relógio do plantão" className="font-mono text-xl text-amber-300">{clockDisplay}</output>
+              <span>{plantaoDate.split('-').reverse().join('/')}</span><span>{shiftLabel}</span>
+            </div>
           {/* Status banners */}
           {schedule.overtime && <p className="text-amber-300 py-2">Hora extra opcional até 21h. Para dar saída, use “Encerrar expediente” no painel do corretor.</p>}
           {schedule.closed && <p className="text-amber-300 py-2">Expediente encerrado. Os atendimentos em curso podem ser finalizados.</p>}
@@ -248,11 +228,15 @@ function AppContent() {
         </div>
       </header>
 
+      <div className="mx-auto w-full max-w-7xl px-4 sm:px-6">
+        <TestModule brokers={brokers} visits={visits} queue={queue} closed={closed} dbConnected={dbConnected}
+          onChanged={load} runMaintenance={runMaintenance} />
+      </div>
       <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 py-6">
         {loadError && <p role="alert" className="text-red-400 mb-4">{loadError}</p>}
         {view === 'auditoria' && <ShiftClosingDashboard />}
         {view === 'auditoria' && <PauseAuditPanel brokers={brokers} />}
-        {(view === 'recepcao' || view === 'corretor') && <OfficialClosingPanel key={`${plantaoDate}-${simulationRun}`}
+        {(view === 'recepcao' || view === 'corretor') && <OfficialClosingPanel key={`${plantaoDate}-${maintenanceVersion}`}
           date={plantaoDate} closed={closed} onClosed={() => setClosedDay(plantaoDate)} />}
         {closed && <p role="status" className="mb-4 text-amber-300">Plantão encerrado para esta data.</p>}
         {publishedDraws.morning && <PendingShiftQueues draw={publishedDraws.morning} brokers={brokers}
@@ -260,14 +244,7 @@ function AppContent() {
         {publishedDraws.afternoon && <PendingShiftQueues draw={publishedDraws.afternoon} brokers={brokers}
           title={schedule.coexistence ? 'Sorteio da tarde — fila da manhã ainda em operação' : 'Sorteio da tarde'} />}
         {view === 'auditoria' && <section className="mb-6 grid md:grid-cols-2 gap-4">{(['manha', 'tarde'] as const).filter(shift => !isExtendedShift || shift === 'manha').map(shift => <div key={shift}><h2 className="font-bold">Inscritos — {shift === 'manha' ? 'Manhã / Integral' : 'Tarde'}</h2><ul>{brokers.filter(b => !b.is_external_partner && (shift === 'manha' ? (morningDraw && [...morningDraw.viva, ...morningDraw.nobre].includes(b.id)) || b.shift === 'manha' && b.arrived_at?.startsWith(plantaoDate) : (b as Broker & { afternoon_enrolled_at?: string }).afternoon_enrolled_at?.startsWith(plantaoDate) || b.shift === 'tarde' && b.arrived_at)).map(b => <li key={b.id}>{b.operational_name} · {b.agency}</li>)}</ul></div>)}</section>}
-        {view === 'recepcao' && !closed && <ExternalPartnerPanel intakeRedirected={partnerIntakeRedirected} />}
-        {/* Keep the existing quick-entry handlers mounted; their controls use the toolbar portal. */}
-        <div hidden={view !== 'recepcao' || closed}>
-          <RecepcaoPanel brokers={brokers} visits={visits} queue={queue}
-            allowTestControls={dbConnected === false || import.meta.env.VITE_PLANTAO_TEST_DATABASE === 'true'}
-            testsDisabled={closed || reiniciando} simulationTarget={simulationTarget}
-            quickLog={quickLog} setQuickLog={setQuickLog} />
-        </div>
+        {view === 'recepcao' && !closed && <><ExternalPartnerPanel intakeRedirected={partnerIntakeRedirected} /><RecepcaoPanel brokers={brokers} visits={visits} queue={queue} /></>}
         {view === 'chamadas' && !closed && <><ExternalPartnerPanel callsOnly /><ChamadasPanel queue={queue} brokers={brokers} /></>}
         {view === 'corretor' && !closed && <><CorretorPanel brokers={brokers} /><ExternalPartnerPanel managementOnly /></>}
         {view === 'fila' && !closed && <FilaPanel queue={sortedQueue} brokers={brokers} allQueue={queue} />}
@@ -279,46 +256,7 @@ function AppContent() {
         {testMode && <span className="ml-2 text-amber-400">· Modo de teste rápido: 10s por chamada</span>}
       </footer>
 
-      {/* Dialog: Reiniciar Plantão */}
-      {reiniciarDialog && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className="bg-slate-900 rounded-2xl border border-slate-700 p-6 max-w-md w-full mx-4">
-            <div className="flex items-start justify-between mb-4">
-              <div className="flex items-center gap-3">
-                <div className="bg-red-500/10 p-3 rounded-xl"><RefreshCw className="h-6 w-6 text-red-400" /></div>
-                <div>
-                  <h2 className="text-xl font-bold">Reiniciar Plantão (Reset de Teste)</h2>
-                  <p className="text-sm text-slate-400">Prepara um novo teste de sorteio</p>
-                </div>
-              </div>
-              <button onClick={() => setReiniciarDialog(false)} className="text-slate-500 hover:text-white"><X className="h-5 w-5" /></button>
-            </div>
 
-            <div className="space-y-3 mb-6">
-              <div className="flex items-start gap-2 text-sm text-slate-300">
-                <span className="text-amber-400 mt-0.5">1.</span>
-                <span>A <strong className="text-white">Fila Geral atual</strong> será limpa e o relógio voltará às <strong className="text-amber-400">08:30:00</strong>.</span>
-              </div>
-              <div className="flex items-start gap-2 text-sm text-slate-300">
-                <span className="text-amber-400 mt-0.5">2.</span>
-                <span>Todos os corretores voltam a <strong className="text-white">ausente/livre</strong> para um novo sorteio.</span>
-              </div>
-              <div className="flex items-start gap-2 text-sm text-slate-300">
-                <span className="text-amber-400 mt-0.5">3.</span>
-                <span>O histórico de visitas e os fatos quantitativos ficam disponíveis após o reset.</span>
-              </div>
-            </div>
-
-            <div className="flex gap-3">
-              <button onClick={handleReiniciar} disabled={reiniciando} className="flex-1 bg-red-500 hover:bg-red-400 disabled:bg-slate-700 text-white font-bold py-3 rounded-xl transition flex items-center justify-center gap-2">
-                <RefreshCw className={`h-5 w-5 ${reiniciando ? 'animate-spin' : ''}`} />
-                {reiniciando ? 'Reiniciando…' : 'Confirmar reinício'}
-              </button>
-              <button onClick={() => setReiniciarDialog(false)} className="px-5 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl transition">Cancelar</button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
