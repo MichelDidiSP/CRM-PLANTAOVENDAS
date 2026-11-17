@@ -337,9 +337,9 @@ export default function RecepcaoPanel({ brokers, visits, queue, allowTestControl
             <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition ${isHoliday ? 'translate-x-5' : 'translate-x-0.5'}`} />
           </button>
         </div>
-        {allowTestControls && simulationTarget && createPortal(
+        {simulationTarget && createPortal(
           <div className="border-t border-slate-700 py-2" aria-label="Geradores rápidos de clientes">
-            <fieldset disabled={testsDisabled || quickSubmitting} className="disabled:opacity-50">
+            <fieldset disabled={!allowTestControls || testsDisabled || quickSubmitting} className="disabled:opacity-50">
               <div className="flex flex-wrap items-end gap-2">
                 <label className="text-xs text-slate-300">Corretor de origem para Indicação / Retorno
                   <select aria-label="Corretor de origem para testes" value={quickOwnerId}
@@ -461,6 +461,7 @@ export default function RecepcaoPanel({ brokers, visits, queue, allowTestControl
                 </div>
               </details>
             </fieldset>
+            {!allowTestControls && <p className="mt-2 text-xs text-slate-400">Abra o ambiente local de simulação para gerar clientes fictícios.</p>}
             {testsDisabled && <p className="mt-2 text-xs text-amber-300">Use o reset de teste para reabrir o plantão fechado.</p>}
             {quickError && <p role="alert" className="mt-2 text-sm text-red-300">{quickError}</p>}
             {quickLog.length > 0 && <div aria-label="Telefones de teste" className="mt-2 max-h-36 overflow-y-auto">

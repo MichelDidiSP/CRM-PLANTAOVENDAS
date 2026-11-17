@@ -29,7 +29,7 @@ export default function SimulationToolbar({ localSimulation, ready, resetting, o
       <div id="simulation-controls" hidden={!expanded}>
         {ready && !localSimulation && <p className="mb-2 text-sm text-slate-300">
           <a className="text-amber-300 underline" href={simulationUrl.href}>Abrir ambiente local de simulação</a>
-          {' '}para testar o reset em uma base de testes em memória.
+          {' '}para usar todos os controles em uma base de testes em memória.
         </p>}
         <fieldset disabled={!ready || resetting} className="flex flex-wrap items-end gap-3 py-2 disabled:opacity-50">
           <label className="text-xs text-slate-300">Relógio virtual

@@ -3,6 +3,8 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../App';
+import RecepcaoPanel from './RecepcaoPanel';
+import { SimProvider } from '@/lib/simContext';
 import { dbReady, supabase } from '@/lib/supabase';
 import { loadReportRows } from '@/lib/reports/reportStore';
 import { isPlantaoClosed } from '@/lib/reports/officialClosing';
@@ -89,6 +91,26 @@ describe('barra de simulação na aplicação', () => {
     await settle(() => button('Motor da Fila').click());
     expect(controls.hidden).toBe(false);
     expect(button('Simular Primeira Visita').closest('#simulation-controls')).toBe(controls);
+  });
+
+  it('mantém os geradores visíveis e bloqueados até abrir a simulação quando o ambiente não permite testes', async () => {
+    const target = document.createElement('div');
+    container.appendChild(target);
+    const setQuickLog = vi.fn();
+    await settle(() => root.render(<SimProvider><RecepcaoPanel brokers={[]} visits={[]} queue={[]}
+      allowTestControls={false} testsDisabled={false} simulationTarget={target}
+      quickLog={[]} setQuickLog={setQuickLog} /></SimProvider>));
+    // The portal destination normally belongs to the toolbar, outside the reception form.
+    container.appendChild(target);
+    for (const label of ['Primeira Visita', 'Decorado', 'Indicação', 'Retorno']) {
+      const generator = button('Simular ' + label);
+      expect(target.contains(generator)).toBe(true);
+      expect(generator.closest('[hidden]')).toBeNull();
+      expect(generator.closest('fieldset')?.disabled).toBe(true);
+      await settle(() => generator.click());
+    }
+    expect(target.textContent).toContain('Abra o ambiente local de simulação');
+    expect(setQuickLog).not.toHaveBeenCalled();
   });
 
   it('gera os quatro tipos com um clique e copia o telefone que identifica o retorno', async () => {
