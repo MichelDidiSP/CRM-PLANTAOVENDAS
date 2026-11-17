@@ -101,7 +101,7 @@ class QueryBuilder {
   }
 
   select(cols = '*') {
-    if (this.op === 'insert') { this.wantReturn = true; this.cols = cols; }
+    if (this.op === 'insert' || this.op === 'update') { this.wantReturn = true; this.cols = cols; }
     else { this.op = 'select'; this.cols = cols; }
     return this;
   }
@@ -178,7 +178,7 @@ class QueryBuilder {
         const matched = rows.filter(row => this.matchFilters(row));
         const upd = this.payload as Row;
         for (const row of matched) Object.assign(row, upd);
-        return { data: null, error: null };
+        return { data: this.wantReturn ? matched.map(row => this.resolve(row)) : null, error: null };
       }
       if (this.op === 'delete') {
         const matched = rows.filter(row => this.matchFilters(row));

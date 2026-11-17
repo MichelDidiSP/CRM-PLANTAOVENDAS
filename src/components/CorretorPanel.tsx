@@ -30,7 +30,7 @@ export default function CorretorPanel({ brokers }: Props) {
 
   const barrierTime = currentShift === 'manha' ? '09:30:00' : '14:30:00';
   const barrierSec = currentShift === 'manha' ? BARRIER_MANHA : BARRIER_TARDE;
-  const simSec = getCurrentTime().getHours() * 3600 + getCurrentTime().getMinutes() * 60 + getCurrentTime().getSeconds();
+  const simSec = simSeconds;
   const isBarrierActive = simSec > barrierSec;
 
   async function updatePresence(broker: Broker, status: BrokerPresence) {

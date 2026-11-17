@@ -1,11 +1,10 @@
 import ShiftClosingDashboard from '@/components/ShiftClosingDashboard';
-import { resetSimulatorReport } from '@/lib/reports/reportStore';
 import OfficialClosingPanel from '@/components/OfficialClosingPanel';
 import { isPlantaoClosed } from '@/lib/reports/officialClosing';
 import { busyReceptionIds, receptionDestination, receptionRoster, visibleDraws } from '@/lib/reception/fallbackOrchestrator';
 import { dispatchGeneralWaiting } from '@/lib/reception/fallbackStore';
 import PauseAuditPanel from '@/components/PauseAuditPanel';
-import { enforcePauses, resetPauseState } from '@/lib/queue/pauseAndPartnersStore';
+import { enforcePauses } from '@/lib/queue/pauseAndPartnersStore';
 import { onlyOwn } from '@/lib/queue/pauseAndPartners';
 import ExternalPartnerPanel from '@/components/ExternalPartnerPanel';
 import { advanceSchedule } from '@/lib/queue/shiftScheduleStore';
@@ -14,10 +13,11 @@ import PendingShiftQueues from '@/components/PendingShiftQueues';
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { Building2, DoorOpen, Tv, Users, ListOrdered, Zap, Clock, Plus, Shuffle, ClipboardList, RefreshCw, X, Trophy, Calendar, Sun, Moon, ArrowRight, Home, Database, TriangleAlert as AlertTriangle } from 'lucide-react';
 import { supabase, dbReady, type Broker, type QueueEntry, type Visit, type PlantaoSession } from '@/lib/supabase';
-import { setCompanyDrawOrder, setCompanyRotationIndex, fetchAll, interleaveQueue, reiniciarPlantao, isLateForSort } from '@/lib/queueEngine';
+import { setCompanyDrawOrder, setCompanyRotationIndex, fetchAll, interleaveQueue, isLateForSort } from '@/lib/queueEngine';
 import { SimProvider, useSim } from '@/lib/simContext';
 
-import RecepcaoPanel, { type QuickEntryLog } from '@/components/RecepcaoPanel';
+import RecepcaoPanel from '@/components/RecepcaoPanel';
+import TestModule from '@/modules/teste/TestModule';
 import ChamadasPanel from '@/components/ChamadasPanel';
 import CorretorPanel from '@/components/CorretorPanel';
 import FilaPanel from '@/components/ScheduledFilaPanel';
@@ -25,7 +25,7 @@ import FilaPanel from '@/components/ScheduledFilaPanel';
 type View = 'recepcao' | 'chamadas' | 'corretor' | 'fila' | 'auditoria';
 
 function AppContent() {
-  const { clockDisplay, setStartTime, addMinute, jumpToAfternoon, testMode, setTestMode, sorteioTriggered, resetClock, simSeconds, currentShift, isWeekday, plantaoDate, setPlantaoDate, isPreSorteio, isCheckinOpen, isAtendimentoActive, isShiftTransition, isAfternoonActive, isMorningQueueActive, isExtendedShift, getCurrentTime } = useSim();
+  const { clockDisplay, testMode, sorteioTriggered, simSeconds, currentShift, isWeekday, plantaoDate, isPreSorteio, isCheckinOpen, isAtendimentoActive, isShiftTransition, isAfternoonActive, isMorningQueueActive, isExtendedShift, getCurrentTime } = useSim();
   const schedule = scheduleAt({ seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate });
   const [morningDraw, setMorningDraw] = useState<ShiftDraw | null>(null);
   const [afternoonDraw, setAfternoonDraw] = useState<ShiftDraw | null>(null);
@@ -39,9 +39,9 @@ function AppContent() {
   const [queue, setQueue] = useState<QueueEntry[]>([]);
   const [activeSession, setActiveSession] = useState<PlantaoSession | null>(null);
   const [loading, setLoading] = useState(true);
-  const [reiniciarDialog, setReiniciarDialog] = useState(false);
-  const [quickLog, setQuickLog] = useState<QuickEntryLog[]>([]);
-  const [reiniciando, setReiniciando] = useState(false);
+  const [maintenanceVersion, setMaintenanceVersion] = useState(0);
+  const maintenanceRunning = useRef(false);
+  const scheduleTask = useRef<Promise<void> | null>(null);
   const pollRef = useRef<number | undefined>(undefined);
 
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -97,9 +97,9 @@ function AppContent() {
   }, [load]);
 
   useEffect(() => {
-    if (loading || closed || scheduleRunning.current) return;
+    if (loading || closed || maintenanceRunning.current || scheduleRunning.current) return;
     scheduleRunning.current = true;
-    advanceSchedule({ seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate }, { deferClosing: true })
+    scheduleTask.current = advanceSchedule({ seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate }, { deferClosing: true })
       .then(async () => {
         const at = getCurrentTime().toISOString();
         await enforcePauses({ at, shift: currentShift });
@@ -126,22 +126,15 @@ function AppContent() {
     busyReceptionIds(queue), null,
   ) !== 'normal';
 
-  async function handleReiniciar() {
-    if (dbConnected !== false) return;
-    setReiniciando(true);
+  async function runMaintenance(work: () => Promise<void>) {
+    if (maintenanceRunning.current) return;
+    maintenanceRunning.current = true;
     try {
-      await resetPauseState();
-      await reiniciarPlantao(brokers);
-      await supabase.from('plantao_daily_closures').delete().eq('date', plantaoDate);
-      await supabase.from('incorporadora_direct_leads').delete().eq('is_test', true);
-      resetSimulatorReport(plantaoDate);
-      setQuickLog([]);
-      resetClock();
+      await scheduleTask.current;
+      await work();
       await load();
-      setReiniciarDialog(false);
-    } finally {
-      setReiniciando(false);
-    }
+      setMaintenanceVersion(value => value + 1);
+    } finally { maintenanceRunning.current = false; }
   }
 
   const navItems: { id: View; label: string; icon: React.ReactNode }[] = [
@@ -196,73 +189,11 @@ function AppContent() {
               </div>
             </div>
 
-            {/* Top row: clock left, controls right */}
-            <div className="flex items-center justify-between gap-4 flex-wrap">
-              {/* Relógio do simulador — topo esquerdo, alto contraste */}
-              <div className="flex items-center gap-3 bg-slate-950 border-2 border-amber-400 rounded-xl px-5 py-2 shrink-0 shadow-lg shadow-amber-500/20">
-                <Clock className="h-7 w-7 text-amber-400 shrink-0" />
-                <div className="flex flex-col items-center">
-                  <span className="font-mono text-3xl font-bold text-amber-300 tabular-nums leading-none tracking-wider drop-shadow-[0_0_8px_rgba(251,191,36,0.4)]">{clockDisplay}</span>
-                  <input
-                    type="time"
-                    step="1"
-                    onChange={(e) => e.target.value && setStartTime(e.target.value)}
-                    className="text-[10px] text-amber-200/60 bg-transparent focus:outline-none mt-1 w-[70px] text-center"
-                    title="Definir hora inicial"
-                  />
-                </div>
-                <div className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium ${currentShift === 'manha' ? 'bg-amber-500/20 text-amber-300' : 'bg-indigo-500/20 text-indigo-300'}`}>
-                  {shiftIcon}
-                  {shiftLabel}
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 flex-wrap justify-end">
-              {/* Calendar / Date Picker */}
-              <div className="flex items-center gap-2 bg-slate-800 rounded-lg px-3 py-1.5">
-                <Calendar className="h-5 w-5 text-amber-400 shrink-0" />
-                <input
-                  type="date"
-                  value={plantaoDate}
-                  onChange={(e) => setPlantaoDate(e.target.value)}
-                  className="text-sm text-slate-300 bg-transparent focus:outline-none"
-                  title="Data do plantão"
-                />
-                <span className={`text-xs px-2 py-0.5 rounded-full ${isWeekday ? 'bg-emerald-500/15 text-emerald-400' : 'bg-orange-500/15 text-orange-400'}`}>
-                  {isWeekday ? 'Dia útil' : 'Fim de semana'}
-                </span>
-              </div>
-
-              <button onClick={addMinute} className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-2 rounded-lg text-sm font-medium transition" title="Avançar 1 minuto">
-                <Plus className="h-4 w-4" /> +1 min
-              </button>
-
-              <button
-                onClick={jumpToAfternoon}
-                className="flex items-center gap-1.5 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 px-3 py-2 rounded-lg text-sm font-medium transition border border-indigo-500/20"
-                title="Pular para a Tarde (13:40h)"
-              >
-                <ArrowRight className="h-4 w-4" /> Pular para a Tarde
-              </button>
-
-              <button
-                onClick={() => setTestMode(!testMode)}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition ${testMode ? 'bg-amber-500 text-slate-950' : 'bg-slate-800 text-slate-400 hover:text-white'}`}
-                title="Reduz o tempo da chamada de 2 min para 10 seg"
-              >
-                <Zap className="h-4 w-4" /> {testMode ? 'Teste ON' : 'Teste rápido'}
-              </button>
-
-              {dbConnected === false && <button
-                onClick={() => setReiniciarDialog(true)}
-                className="flex items-center gap-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 px-3 py-2 rounded-lg text-sm font-medium transition border border-red-500/20"
-                title="Reiniciar plantão para novo teste"
-              >
-                <RefreshCw className="h-4 w-4" /> Reiniciar Plantão
-              </button>}
+            <div className="flex items-center gap-3 py-2 text-sm text-slate-300">
+              <Clock className="h-5 w-5 text-amber-300" />
+              <output aria-label="Relógio do plantão" className="font-mono text-xl text-amber-300">{clockDisplay}</output>
+              <span>{plantaoDate.split('-').reverse().join('/')}</span><span>{shiftLabel}</span>
             </div>
-            </div>
-
           {/* Status banners */}
           {schedule.overtime && <p className="text-amber-300 py-2">Hora extra opcional até 21h. Para dar saída, use “Encerrar expediente” no painel do corretor.</p>}
           {schedule.closed && <p className="text-amber-300 py-2">Expediente encerrado. Os atendimentos em curso podem ser finalizados.</p>}
@@ -297,11 +228,15 @@ function AppContent() {
         </div>
       </header>
 
+      <div className="mx-auto w-full max-w-7xl px-4 sm:px-6">
+        <TestModule brokers={brokers} visits={visits} queue={queue} closed={closed} dbConnected={dbConnected}
+          onChanged={load} runMaintenance={runMaintenance} />
+      </div>
       <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 py-6">
         {loadError && <p role="alert" className="text-red-400 mb-4">{loadError}</p>}
         {view === 'auditoria' && <ShiftClosingDashboard />}
         {view === 'auditoria' && <PauseAuditPanel brokers={brokers} />}
-        {(view === 'recepcao' || view === 'corretor') && <OfficialClosingPanel key={plantaoDate}
+        {(view === 'recepcao' || view === 'corretor') && <OfficialClosingPanel key={`${plantaoDate}-${maintenanceVersion}`}
           date={plantaoDate} closed={closed} onClosed={() => setClosedDay(plantaoDate)} />}
         {closed && <p role="status" className="mb-4 text-amber-300">Plantão encerrado para esta data.</p>}
         {publishedDraws.morning && <PendingShiftQueues draw={publishedDraws.morning} brokers={brokers}
@@ -309,8 +244,7 @@ function AppContent() {
         {publishedDraws.afternoon && <PendingShiftQueues draw={publishedDraws.afternoon} brokers={brokers}
           title={schedule.coexistence ? 'Sorteio da tarde — fila da manhã ainda em operação' : 'Sorteio da tarde'} />}
         {view === 'auditoria' && <section className="mb-6 grid md:grid-cols-2 gap-4">{(['manha', 'tarde'] as const).filter(shift => !isExtendedShift || shift === 'manha').map(shift => <div key={shift}><h2 className="font-bold">Inscritos — {shift === 'manha' ? 'Manhã / Integral' : 'Tarde'}</h2><ul>{brokers.filter(b => !b.is_external_partner && (shift === 'manha' ? (morningDraw && [...morningDraw.viva, ...morningDraw.nobre].includes(b.id)) || b.shift === 'manha' && b.arrived_at?.startsWith(plantaoDate) : (b as Broker & { afternoon_enrolled_at?: string }).afternoon_enrolled_at?.startsWith(plantaoDate) || b.shift === 'tarde' && b.arrived_at)).map(b => <li key={b.id}>{b.operational_name} · {b.agency}</li>)}</ul></div>)}</section>}
-        {view === 'recepcao' && !closed && <><ExternalPartnerPanel intakeRedirected={partnerIntakeRedirected} /><RecepcaoPanel brokers={brokers} visits={visits} queue={queue}
-          allowTestControls={dbConnected === false || import.meta.env.VITE_PLANTAO_TEST_DATABASE === 'true'} quickLog={quickLog} setQuickLog={setQuickLog} /></>}
+        {view === 'recepcao' && !closed && <><ExternalPartnerPanel intakeRedirected={partnerIntakeRedirected} /><RecepcaoPanel brokers={brokers} visits={visits} queue={queue} /></>}
         {view === 'chamadas' && !closed && <><ExternalPartnerPanel callsOnly /><ChamadasPanel queue={queue} brokers={brokers} /></>}
         {view === 'corretor' && !closed && <><CorretorPanel brokers={brokers} /><ExternalPartnerPanel managementOnly /></>}
         {view === 'fila' && !closed && <FilaPanel queue={sortedQueue} brokers={brokers} allQueue={queue} />}
@@ -322,46 +256,7 @@ function AppContent() {
         {testMode && <span className="ml-2 text-amber-400">· Modo de teste rápido: 10s por chamada</span>}
       </footer>
 
-      {/* Dialog: Reiniciar Plantão */}
-      {reiniciarDialog && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className="bg-slate-900 rounded-2xl border border-slate-700 p-6 max-w-md w-full mx-4">
-            <div className="flex items-start justify-between mb-4">
-              <div className="flex items-center gap-3">
-                <div className="bg-red-500/10 p-3 rounded-xl"><RefreshCw className="h-6 w-6 text-red-400" /></div>
-                <div>
-                  <h2 className="text-xl font-bold">Reiniciar Plantão</h2>
-                  <p className="text-sm text-slate-400">Prepara um novo teste de sorteio</p>
-                </div>
-              </div>
-              <button onClick={() => setReiniciarDialog(false)} className="text-slate-500 hover:text-white"><X className="h-5 w-5" /></button>
-            </div>
 
-            <div className="space-y-3 mb-6">
-              <div className="flex items-start gap-2 text-sm text-slate-300">
-                <span className="text-amber-400 mt-0.5">1.</span>
-                <span>A <strong className="text-white">Fila Geral atual</strong> será limpa e o relógio voltará às <strong className="text-amber-400">08:30:00</strong>.</span>
-              </div>
-              <div className="flex items-start gap-2 text-sm text-slate-300">
-                <span className="text-amber-400 mt-0.5">2.</span>
-                <span>Todos os corretores voltam a <strong className="text-white">ausente/livre</strong> para um novo sorteio.</span>
-              </div>
-              <div className="flex items-start gap-2 text-sm text-slate-300">
-                <span className="text-amber-400 mt-0.5">3.</span>
-                <span>O histórico de visitas fica disponível para testar Retorno e Duplicidade.</span>
-              </div>
-            </div>
-
-            <div className="flex gap-3">
-              <button onClick={handleReiniciar} disabled={reiniciando} className="flex-1 bg-red-500 hover:bg-red-400 disabled:bg-slate-700 text-white font-bold py-3 rounded-xl transition flex items-center justify-center gap-2">
-                <RefreshCw className={`h-5 w-5 ${reiniciando ? 'animate-spin' : ''}`} />
-                {reiniciando ? 'Reiniciando…' : 'Confirmar reinício'}
-              </button>
-              <button onClick={() => setReiniciarDialog(false)} className="px-5 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl transition">Cancelar</button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
