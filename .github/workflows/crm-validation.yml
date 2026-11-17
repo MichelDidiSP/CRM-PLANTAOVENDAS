@@ -56,7 +56,7 @@ jobs:
           for migration in supabase/migrations/*.sql; do
             # Use the applied copies of the migration drafts duplicated by Bolt.
             case "$migration" in
-              */20261113000000_*|*/20261113180000_*|*/20261113230000_*|*/20261115150000_*|*/20261115180000_*) continue ;;
+              */20261113000000_*|*/20261113180000_*|*/20261113230000_*|*/20261115150000_*|*/20261115180000_*|*/20261116230000_*) continue ;;
             esac
             psql -v ON_ERROR_STOP=1 -f "$migration"
           done
