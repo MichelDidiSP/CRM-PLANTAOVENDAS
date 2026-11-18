@@ -46,12 +46,16 @@ export async function isPlantaoClosed(date: string) {
 export async function closePlantao(date: string): Promise<ClosingSummary> {
   await dbReady;
   if (typeof supabase.rpc === 'function') {
-    const { data, error } = await supabase.rpc('close_plantao_day', { day: date });
+    const { data, error } = await supabase.rpc('close_plantao_operation', { day: date, at_time: getPlantaoTime().toISOString() });
     if (error) throw new Error(error.message);
     return data as ClosingSummary;
   }
   const saved = await supabase.from('plantao_daily_closures').select('*').eq('date', date).maybeSingle();
-  if (saved.data) return saved.data as ClosingSummary;
+  if (saved.error) throw new Error(saved.error.message);
+  if (saved.data) {
+    const { date: savedDate, closed_at, rows, recipients } = saved.data;
+    return { date: savedDate, closed_at, rows, recipients } as ClosingSummary;
+  }
   const [facts, queue, direct, partners, reservations, partnerDetails] = await Promise.all([
     loadReportRows({ period: 'day', date, shift: 'manha' }),
     supabase.from('queue_entries').select('*, visit:visits(*), broker:brokers(*)'),
@@ -81,7 +85,7 @@ export async function closePlantao(date: string): Promise<ClosingSummary> {
     }),
   ];
   const summary: ClosingSummary = { date, closed_at: getPlantaoTime().toISOString(), rows: facts, recipients: [] };
-  const result = await supabase.from('plantao_daily_closures').insert({ ...summary, customers });
+  const result = await supabase.from('plantao_daily_closures').insert({ ...summary, closed_by: 'operacao_stand', customers });
   if (result.error) throw new Error(result.error.message);
   await supabase.from('plantao_sessions').update({ status: 'ended', ended_at: summary.closed_at })
     .eq('plantao_date', date).eq('status', 'active');
