@@ -46,9 +46,12 @@ export async function loadReportRows(filter: ReportFilter): Promise<ReportRow[]>
     const key = `partner:${partner.id}`;
     if (!cache.has(key)) cache.set(key,{date,shift: afternoon && time >= '14:00:01' ? 'tarde':'manha',company:partner.company?.trim() || 'Autônomo',team:'Parcerias',type:'Parceria Externa',media:normalizedMedia(partnerDetails.data?.find(row => row.intake_id === partner.id)?.media_channel),count:1});
   }
-  const directRows: ReportRow[] = (direct.data ?? []).map(lead => ({
-    date: businessDate(lead.created_at), shift: lead.shift, company: 'Incorporadora', team: 'Sem Equipe',
-    type: attendanceType(lead.visit_reason), media: normalizedMedia(lead.media_channel), count: 1,
-  }));
-  return scopeRows([...cache.values(), ...directRows].filter(row => row.date >= start && row.date <= end), filter);
+  for (const lead of direct.data ?? []) {
+    const key = `direct:${lead.id}`;
+    if (!cache.has(key)) cache.set(key, {
+      date: businessDate(lead.created_at), shift: lead.shift, company: 'Incorporadora', team: 'Sem Equipe',
+      type: attendanceType(lead.visit_reason), media: normalizedMedia(lead.media_channel), count: 1,
+    });
+  }
+  return scopeRows([...cache.values()].filter(row => row.date >= start && row.date <= end), filter);
 }
