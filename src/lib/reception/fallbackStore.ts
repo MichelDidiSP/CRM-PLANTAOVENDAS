@@ -1,9 +1,9 @@
+import { dispatchOperationalWaiting } from './operationalStore';
 import { dbReady, supabase, type QueueEntry, type Broker, type VisitReason, type Shift } from '../supabase';
-import { dispatchBroker, markBrokerInService, markStandardBrokerInService } from '../queueEngine';
+import { markBrokerInService, markStandardBrokerInService } from '../queueEngine';
 import { partnerIntake, type PartnerIntake } from '../queue/pauseAndPartners';
 import { completePhone, firstName, normalizePhone } from './intake';
 import type { ScheduleClock } from '../queue/shiftSchedule';
-import { busyReceptionIds, resolveReceptionDispatch } from './fallbackOrchestrator';
 
 export type DirectLead = {
   customer_name: string;
@@ -43,14 +43,7 @@ export async function claimReceptionCall(entry: QueueEntry, broker: Broker, spli
 }
 
 export async function dispatchGeneralWaiting(queue: QueueEntry[], brokers: Broker[], clock: ScheduleClock, at: string) {
-  const entry = queue.filter(row => row.reception_waiting && row.queue_status === 'aguardando')
-    .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id))[0];
-  if (!entry) return false;
-  const busy = busyReceptionIds(queue);
-  const { broker, split } = resolveReceptionDispatch(entry, brokers, clock, busy, () =>
-    dispatchBroker(brokers, 'geral', clock.seconds, busy, null, entry.visit?.referred_broker_id ?? null).broker,
-  );
-  return broker ? claimReceptionCall(entry, broker, split, at, !entry.visit?.referred_broker_id && entry.queue_type === 'geral') : false;
+  return dispatchOperationalWaiting(queue, brokers, clock, at);
 }
 
 export async function savePartnerReception(

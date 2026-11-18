@@ -1,3 +1,5 @@
+import { attachReceptionPolicies, synchronizeReceptionTrace } from '@/lib/reception/operationalStore';
+import ReceptionAuditPanel from '@/components/ReceptionAuditPanel';
 import ShiftClosingDashboard from '@/components/ShiftClosingDashboard';
 import OfficialClosingPanel from '@/components/OfficialClosingPanel';
 import { isPlantaoClosed } from '@/lib/reports/officialClosing';
@@ -71,10 +73,17 @@ function AppContent() {
     setLoadError(null);
     setBrokers(data.brokers);
     setVisits(data.visits);
-    setQueue(data.queue);
     setActiveSession(data.activeSession);
     const draws = await supabase.from('plantao_sessions').select('*').eq('plantao_date', plantaoDate);
     if (draws.error) { setLoadError('Não foi possível carregar os sorteios.'); setLoading(false); return; }
+    data.queue = attachReceptionPolicies(data.queue, draws.data ?? []);
+    try {
+      await Promise.all(data.queue.map(entry => synchronizeReceptionTrace(entry, data.brokers)));
+    } catch (error) {
+      setLoadError(`Não foi possível concluir o registro do atendimento: ${error instanceof Error ? error.message : String(error)}`);
+      setLoading(false); return;
+    }
+    setQueue(data.queue);
     const morning = draws.data?.find((e: { id: string }) => e.id === `schedule_${plantaoDate}_morning`)?.schedule_data;
     const afternoon = draws.data?.find((e: { id: string }) => e.id === `schedule_${plantaoDate}_afternoon`)?.schedule_data;
     setMorningDraw(hasDrawParticipants(morning) ? morning : null);
@@ -259,6 +268,7 @@ function AppContent() {
         {loadError && <p role="alert" className="text-red-400 mb-4">{loadError}</p>}
         {view === 'auditoria' && <ShiftClosingDashboard />}
         {view === 'auditoria' && <PauseAuditPanel brokers={brokers} />}
+        {view === 'auditoria' && <ReceptionAuditPanel brokers={brokers} queue={queue} />}
         {(view === 'recepcao' || view === 'corretor') && <OfficialClosingPanel key={`${plantaoDate}-${maintenanceVersion}`}
           date={plantaoDate} closed={closed} onClosed={() => setClosedDay(plantaoDate)} />}
         {closed && <p role="status" className="mb-4 text-amber-300">Plantão encerrado para esta data.</p>}
@@ -267,7 +277,7 @@ function AppContent() {
         {publishedDraws.afternoon && <PendingShiftQueues draw={publishedDraws.afternoon} brokers={brokers}
           title={schedule.coexistence ? 'Sorteio da tarde — fila da manhã ainda em operação' : 'Sorteio da tarde'} />}
         {view === 'auditoria' && <section className="mb-6 grid md:grid-cols-2 gap-4">{(['manha', 'tarde'] as const).filter(shift => !isExtendedShift || shift === 'manha').map(shift => <div key={shift}><h2 className="font-bold">Inscritos — {shift === 'manha' ? 'Manhã / Integral' : 'Tarde'}</h2><ul>{brokers.filter(b => !b.is_external_partner && (shift === 'manha' ? (morningDraw && [...morningDraw.viva, ...morningDraw.nobre].includes(b.id)) || b.shift === 'manha' && b.arrived_at?.startsWith(plantaoDate) : (b as Broker & { afternoon_enrolled_at?: string }).afternoon_enrolled_at?.startsWith(plantaoDate) || b.shift === 'tarde' && b.arrived_at)).map(b => <li key={b.id}>{b.operational_name} · {b.agency}</li>)}</ul></div>)}</section>}
-        {view === 'recepcao' && !closed && <><ExternalPartnerPanel intakeRedirected={partnerIntakeRedirected} /><RecepcaoPanel brokers={brokers} visits={visits} queue={queue} /></>}
+        {view === 'recepcao' && !closed && <><ExternalPartnerPanel intakeRedirected={partnerIntakeRedirected} /><RecepcaoPanel brokers={brokers} visits={visits} queue={queue} onChanged={load} /></>}
         {view === 'chamadas' && !closed && <><ExternalPartnerPanel callsOnly /><ChamadasPanel queue={queue} brokers={brokers} /></>}
         {view === 'corretor' && !closed && <><CorretorPanel brokers={brokers} /><ExternalPartnerPanel managementOnly /></>}
         {view === 'fila' && !closed && <FilaPanel queue={sortedQueue} brokers={brokers} allQueue={queue} />}

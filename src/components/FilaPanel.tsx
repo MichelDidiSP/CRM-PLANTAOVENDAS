@@ -1,10 +1,11 @@
+import { dispatchOperationalEntry } from '@/lib/reception/operationalStore';
 import { actOnPause } from '@/lib/queue/pauseAndPartnersStore';
 import { useEffect, useRef } from 'react';
 import { getPlantaoTime, afterPlantaoDelay } from '@/lib/plantaoClock';
 import { firstName, attendanceTrace } from '@/lib/reception/intake';
 import { Bell, CircleCheck as CheckCircle2, Eye, ArrowLeftRight, Clock, TriangleAlert as AlertTriangle, UserCheck, History, Chrome as Home, Repeat, Sun, Moon } from 'lucide-react';
 import { supabase, type Broker, type QueueEntry, type Agency } from '@/lib/supabase';
-import { markMeritReturns, concludeAttendance, isLateForSort, interleaveQueue, reverseInterleaveQueue, nextBrokerFromInverseQueue, nextBrokerForGeneralQueue, nextBrokerByArrival, nextBrokerFromInverseTop, moveBrokerToEndOfDirectQueue, moveBrokerToEndOfInverseQueue, dispatchBroker, isArrivalOrderMode, nextBrokerByArrivalAnyAgency, nextBrokerByArrivalInverse, ATENDIMENTO_MANHA_START, markBrokerInService, markStandardBrokerInService } from '@/lib/queueEngine';
+import { fetchAll, markMeritReturns, concludeAttendance, isLateForSort, interleaveQueue, reverseInterleaveQueue, nextBrokerFromInverseQueue, nextBrokerForGeneralQueue, nextBrokerByArrival, nextBrokerFromInverseTop, moveBrokerToEndOfDirectQueue, moveBrokerToEndOfInverseQueue, dispatchBroker, isArrivalOrderMode, nextBrokerByArrivalAnyAgency, nextBrokerByArrivalInverse, ATENDIMENTO_MANHA_START, markBrokerInService, markStandardBrokerInService } from '@/lib/queueEngine';
 import { resolveReceptionDispatch } from '@/lib/reception/fallbackOrchestrator';
 import { claimReceptionCall } from '@/lib/reception/fallbackStore';
 import { useSim } from '@/lib/simContext';
@@ -68,6 +69,13 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
    */
   async function callNext(entry: QueueEntry) {
     const referredBrokerId = entry.visit?.referred_broker_id ?? null;
+    if (entry.reception_waiting || referredBrokerId) {
+      const live = await fetchAll();
+      if (live.error) throw live.error;
+      const fresh = live.queue.find(row => row.id === entry.id);
+      if (fresh) await dispatchOperationalEntry(fresh, live.brokers, live.queue, clock, getPlantaoTime().toISOString());
+      return;
+    }
     const lastCalledAgency = await getLastCalledAgency();
     const { broker, split } = resolveReceptionDispatch(entry, brokers, clock, busyBrokerIds, () =>
       dispatchBroker(brokers, entry.reception_waiting ? 'geral' : entry.queue_type, simSeconds,
@@ -104,13 +112,10 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
   }
 
   async function callDecorado(entry: QueueEntry) {
-    if (isArrivalOrderMode(simSeconds)) {
-      const broker = nextBrokerByArrivalInverse(brokers, busyBrokerIds);
-      await updateEntryToCalling(entry, broker?.id ?? null);
-    } else {
-      const broker = nextBrokerFromInverseTop(brokers, busyBrokerIds);
-      await updateEntryToCalling(entry, broker?.id ?? null);
-    }
+    const live = await fetchAll();
+    if (live.error) throw live.error;
+    const fresh = live.queue.find(row => row.id === entry.id);
+    if (fresh) await dispatchOperationalEntry(fresh, live.brokers, live.queue, clock, getPlantaoTime().toISOString());
   }
 
   async function callParceria(entry: QueueEntry) {
@@ -118,7 +123,9 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
   }
 
   async function confirmPresence(entry: QueueEntry) {
-    await supabase.from('queue_entries').update({ queue_status: 'em_atendimento', updated_at: getPlantaoTime().toISOString() }).eq('id', entry.id);
+    const claimed = await supabase.from('queue_entries').update({ queue_status: 'em_atendimento', updated_at: getPlantaoTime().toISOString() })
+      .eq('id', entry.id).eq('queue_status', 'chamando').eq('broker_id', entry.broker_id).select('id').maybeSingle();
+    if (claimed.error || !claimed.data) return;
     if (entry.visit_id) {
       await supabase.from('visits').update({ status: 'em_atendimento' }).eq('id', entry.visit_id);
     }
@@ -128,6 +135,10 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
   }
 
   async function markAbsent(entry: QueueEntry) {
+    const reserved = await supabase.from('queue_entries').update({ queue_status: 'ausente' })
+      .eq('id', entry.id).eq('queue_status', 'chamando').eq('broker_id', entry.broker_id)
+      .eq('called_at', entry.called_at).select('id').maybeSingle();
+    if (reserved.error || !reserved.data) return;
     if (entry.broker_id) {
       // 3 strikes → broker is paused (not just pausa), next broker from same queue
       const isLastAttempt = entry.attempts >= 3;
@@ -144,7 +155,7 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
     await supabase
       .from('queue_entries')
       .update({ queue_status: 'aguardando', broker_id: null, attempts: wasLastAttempt ? 0 : entry.attempts, updated_at: getPlantaoTime().toISOString() })
-      .eq('id', entry.id);
+      .eq('id', entry.id).eq('queue_status', 'ausente');
     if (entry.visit_id) {
       await supabase.from('visits').update({ status: 'aguardando' }).eq('id', entry.visit_id);
     }
@@ -170,7 +181,9 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
   }
 
   async function cancelCall(entry: QueueEntry) {
-    await supabase.from('queue_entries').update({ queue_status: 'aguardando', broker_id: null, updated_at: getPlantaoTime().toISOString() }).eq('id', entry.id);
+    const cancelled = await supabase.from('queue_entries').update({ queue_status: 'aguardando', broker_id: null, updated_at: getPlantaoTime().toISOString() })
+      .eq('id', entry.id).eq('queue_status', 'chamando').eq('broker_id', entry.broker_id).eq('called_at', entry.called_at).select('id').maybeSingle();
+    if (cancelled.error || !cancelled.data) return;
     if (entry.visit_id) {
       await supabase.from('visits').update({ status: 'aguardando' }).eq('id', entry.visit_id);
     }
