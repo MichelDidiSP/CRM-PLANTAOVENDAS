@@ -25,6 +25,8 @@ jobs:
         run: git diff --exit-code 178b7bf4fd17fdfd78b66c8b5caaf0539a42393f HEAD -- src/modules/teste/automaticDraw.integration.test.tsx
       - name: Confirmar testes de fechamento e reset da PR 10
         run: git diff --exit-code 6ab3567a93e00b034edb3604c1139638005dc8ea HEAD -- src/modules/teste/closingAndReset.rpc.test.tsx src/modules/teste/resetTestPlantao.integration.test.tsx supabase/tests/direct_closing_and_test_reset.sql
+      - name: Confirmar testes da PR 11 e ausência de novas migrações
+        run: git diff --exit-code cef62a818d82387453224b92d911571b6670895f HEAD -- src/modules/teste/TestCustomers.integration.test.tsx supabase/tests/test_customers_safeupdate.sql supabase/migrations
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -87,3 +89,4 @@ jobs:
           psql -f supabase/tests/reception_fallback.sql
           psql -f supabase/tests/automatic_draw.sql
           psql -f supabase/tests/direct_closing_and_test_reset.sql
+          psql -f supabase/tests/reception_choices.sql

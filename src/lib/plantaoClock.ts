@@ -3,6 +3,7 @@ export type ClockSource = { now: () => number; callDuration?: number };
 let source: ClockSource | undefined;
 const listeners = new Set<() => void>();
 let snapshot = { timestamp: Date.now(), callDuration: 120 };
+export function isVirtualClockActive(): boolean { return source !== undefined; }
 export function getPlantaoTime(): Date { return new Date(source?.now() ?? Date.now()); }
 export function publishClock() {
   snapshot = { timestamp: getPlantaoTime().getTime(), callDuration: source?.callDuration ?? 120 };

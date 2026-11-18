@@ -1,13 +1,11 @@
+import { dispatchOperationalEntry } from '@/lib/reception/operationalStore';
 import { actOnPause } from '@/lib/queue/pauseAndPartnersStore';
 import { getPlantaoTime, afterPlantaoDelay, plantaoClockParts } from '@/lib/plantaoClock';
 import { firstName, attendanceTrace } from '@/lib/reception/intake';
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { Volume2, VolumeX, Timer, Users, Building2, Zap, Chrome as Home, ArrowLeftRight, TriangleAlert as AlertTriangle, History } from 'lucide-react';
 import { supabase, type Broker, type QueueEntry, type Agency } from '@/lib/supabase';
-import { formatTime, nextBrokerFromInverseTop, nextBrokerFromAgency, nextBrokerByArrival, markBrokerInService, markStandardBrokerInService } from '@/lib/queueEngine';
-import { busyReceptionIds, resolveReceptionDispatch } from '@/lib/reception/fallbackOrchestrator';
-import { claimReceptionCall } from '@/lib/reception/fallbackStore';
-import { dispatchBroker } from '@/lib/queueEngine';
+import { fetchAll, formatTime, nextBrokerFromAgency, markBrokerInService, markStandardBrokerInService } from '@/lib/queueEngine';
 import { useSim } from '@/lib/simContext';
 
 type Props = {
@@ -53,6 +51,10 @@ export default function ChamadasPanel({ queue, brokers }: Props) {
 
     // Enter the official continuous-pause flow using the same operational clock.
     const at = getPlantaoTime().toISOString();
+    const reserved = await supabase.from('queue_entries').update({ queue_status: 'ausente' })
+      .eq('id', currentCall.id).eq('queue_status', 'chamando').eq('broker_id', currentCall.broker_id)
+      .eq('called_at', currentCall.called_at).select('id').maybeSingle();
+    if (reserved.error || !reserved.data) return;
     if (currentCall.broker_id) {
       await supabase
         .from('brokers')
@@ -75,7 +77,7 @@ export default function ChamadasPanel({ queue, brokers }: Props) {
         attempts: wasLastAttempt ? 0 : currentCall.attempts,
         updated_at: getPlantaoTime().toISOString(),
       })
-      .eq('id', currentCall.id);
+      .eq('id', currentCall.id).eq('queue_status', 'ausente');
 
     if (currentCall.visit_id) {
       await supabase.from('visits').update({ status: 'aguardando' }).eq('id', currentCall.visit_id);
@@ -102,17 +104,13 @@ export default function ChamadasPanel({ queue, brokers }: Props) {
 
       const entry = refreshedQueue as QueueEntry;
       const reason = entry.visit?.visit_reason;
-      if (entry.reception_waiting || reason === 'Indicação' || reason === 'Retorno') {
-        const busy = busyReceptionIds(queue.filter(row => row.id !== entry.id));
+      if (entry.reception_waiting || entry.queue_type === 'decorado' || reason?.startsWith('Indicação') || reason === 'Retorno') {
         const clock = { seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate };
-        const { broker, split } = resolveReceptionDispatch(entry, brokers, clock, busy, () =>
-          dispatchBroker(brokers, entry.reception_waiting ? 'geral' : entry.queue_type, simSeconds,
-            busy, null, entry.visit?.referred_broker_id ?? null).broker,
-        );
-        if (broker) {
-          try { await claimReceptionCall(entry, broker, split, getPlantaoTime().toISOString()); }
-          catch { setAutoRecallNotice('Não foi possível chamar o corretor. Cliente permanece aguardando.'); }
-        }
+        try {
+          const live = await fetchAll();
+          if (live.error) throw live.error;
+          await dispatchOperationalEntry(entry, live.brokers, live.queue, clock, getPlantaoTime().toISOString());
+        } catch { setAutoRecallNotice('Não foi possível chamar o corretor. Cliente permanece aguardando.'); }
         return;
       }
       let nextBrokerId: string | null = null;
@@ -121,11 +119,7 @@ export default function ChamadasPanel({ queue, brokers }: Props) {
         brokers.filter((b) => b.attendance_status === 'em_mesa' || b.attendance_status === 'decorado').map((b) => b.id),
       );
 
-      if (entry.queue_type === 'decorado') {
-        // Fila inversa: primeiro corretor disponível do topo da inversa
-        const broker = nextBrokerFromInverseTop(brokers, busyIds);
-        nextBrokerId = broker?.id ?? null;
-      } else if (entry.queue_type === 'parceria') {
+      if (entry.queue_type === 'parceria') {
         nextBrokerId = null;
       } else {
         // Fila geral: próximo corretor livre da mesma imobiliária
