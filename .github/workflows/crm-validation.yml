@@ -23,6 +23,8 @@ jobs:
         run: git diff --exit-code e29222140e424ad77a9fb3b80c991edae13a76c3 HEAD -- src/modules/teste/TestModule.test.tsx src/modules/teste/databaseConnection.test.ts
       - name: Confirmar testes de sorteio da PR 9
         run: git diff --exit-code 178b7bf4fd17fdfd78b66c8b5caaf0539a42393f HEAD -- src/modules/teste/automaticDraw.integration.test.tsx
+      - name: Confirmar testes de fechamento e reset da PR 10
+        run: git diff --exit-code 6ab3567a93e00b034edb3604c1139638005dc8ea HEAD -- src/modules/teste/closingAndReset.rpc.test.tsx src/modules/teste/resetTestPlantao.integration.test.tsx supabase/tests/direct_closing_and_test_reset.sql
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -48,6 +50,19 @@ jobs:
       PGPASSWORD: postgres
     steps:
       - uses: actions/checkout@v4
+      - name: Obter pg-safeupdate 1.5
+        uses: actions/checkout@v4
+        with:
+          repository: eradman/pg-safeupdate
+          ref: fbea44215425dc1092f5c98c28471eba90d0c1eb
+          path: .ci/pg-safeupdate
+      - name: Instalar pg-safeupdate no PostgreSQL 16
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          docker exec "$POSTGRES_CONTAINER" sh -c 'apt-get update && apt-get install -y --no-install-recommends build-essential postgresql-server-dev-16'
+          docker cp .ci/pg-safeupdate "$POSTGRES_CONTAINER":/tmp/pg-safeupdate
+          docker exec "$POSTGRES_CONTAINER" make -C /tmp/pg-safeupdate PG_CONFIG=/usr/lib/postgresql/16/bin/pg_config install
       - name: Aplicar migrações e validar recepção e fechamento
         run: |
           psql -v ON_ERROR_STOP=1 <<'SQL'
@@ -62,10 +77,13 @@ jobs:
           for migration in supabase/migrations/*.sql; do
             # Use the applied copies of the migration drafts duplicated by Bolt.
             case "$migration" in
-              */20261113000000_*|*/20261113180000_*|*/20261113230000_*|*/20261115150000_*|*/20261115180000_*|*/20261116230000_*) continue ;;
+              */20261113000000_*|*/20261113180000_*|*/20261113230000_*|*/20261115150000_*|*/20261115180000_*|*/20261116230000_*|*/20261118013000_*) continue ;;
             esac
             psql -v ON_ERROR_STOP=1 -f "$migration"
           done
+          # Every test connection loads the actual extension, including SECURITY DEFINER calls.
+          export PGOPTIONS='-c session_preload_libraries=safeupdate'
+          psql -f supabase/tests/test_customers_safeupdate.sql
           psql -f supabase/tests/reception_fallback.sql
           psql -f supabase/tests/automatic_draw.sql
           psql -f supabase/tests/direct_closing_and_test_reset.sql
