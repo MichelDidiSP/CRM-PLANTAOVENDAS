@@ -19,6 +19,8 @@ jobs:
         run: git diff --exit-code 95ac905c1b5d694a9352ddba308e4501f7572714 HEAD -- src/lib/queue/coreDistribution.ts src/lib/queue/shiftSchedule.ts src/lib/queue/pauseAndPartners.ts src/lib/reception/intake.ts
       - name: Confirmar orquestrador e testes originais da PR 6
         run: git diff --exit-code ad3f552f1a76b6632d80a96aeaf482763af3c8d2 HEAD -- src/lib/reception/fallbackOrchestrator.ts 'src/lib/**/*.test.ts' src/lib/queueEngine.test.ts
+      - name: Confirmar testes do módulo TESTE da PR 8
+        run: git diff --exit-code e29222140e424ad77a9fb3b80c991edae13a76c3 HEAD -- src/modules/teste/TestModule.test.tsx src/modules/teste/databaseConnection.test.ts
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -63,3 +65,4 @@ jobs:
             psql -v ON_ERROR_STOP=1 -f "$migration"
           done
           psql -f supabase/tests/reception_fallback.sql
+          psql -f supabase/tests/automatic_draw.sql

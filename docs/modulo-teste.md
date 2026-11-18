@@ -47,3 +47,13 @@ O contexto operacional e `plantaoClock.ts` devem permanecer: a Recepção, Fila,
 ## Validação
 
 Os cinco arquivos congelados e todos os arquivos dos 240 testes da PR #6 são comparados com a referência original no CI. Os testes adicionais ficam dentro do próprio módulo e exercitam a interface com os motores reais, incluindo retorno ao relógio real, publicação antecipada das filas, cortes de presença, pausa contínua, cronômetro da TV, entrada rápida, privacidade, reinicialização e preservação da conexão configurada.
+
+## Gatilho automático dos sorteios
+
+Abrir a aplicação pelo relógio real depois das janelas, ainda sem inscritos, podia criar registros de sorteio vazios em `plantao_sessions`. Ao ativar TESTE, registrar presença às 08:30 e avançar para 08:46, a agenda via o identificador já existente e ignorava os inscritos. O mesmo ocorria na tarde. Além disso, o efeito de `App.tsx` descartava alterações do relógio recebidas durante uma consulta em andamento.
+
+O adaptador `shiftScheduleStore.ts` agora distingue um registro vazio de um sorteio com participantes. Somente registros vazios podem ser completados; sorteios válidos permanecem imutáveis. `App.tsx` guarda o horário mais recente recebido durante uma execução e o processa assim que a consulta termina, recarregando as filas para publicação. A ordem das imobiliárias só é instalada a partir de uma sessão com participantes. Os motores e limites de horário continuam iguais.
+
+Antes de publicar a interface contra um Supabase existente, aplique a migração `20261117193000_retry_empty_shift_draws.sql`. Ela mantém a transação oficial e seu bloqueio por dia, permitindo substituir exclusivamente registros vazios. Não é necessário apagar histórico nem reiniciar um sorteio válido. A migração é necessária para recuperar registros vazios no banco remoto; o adaptador local reproduz a mesma decisão.
+
+`automaticDraw.integration.test.tsx` acrescenta cinco cenários à suíte de 254 testes preservada: inscrição pelos botões reais e avanço a 08:46, salto a 08:50, inscrição da tarde e avanço a 13:46, salto durante consulta pendente e passagem de 08:45:59 a 08:46 pelo relógio real. Os testes verificam persistência, listas e ordem das imobiliárias na tela, ausência de novo sorteio e ativação posterior. `supabase/tests/automatic_draw.sql` valida também a recuperação e a imutabilidade pela função PostgreSQL. O CI compara os arquivos dos 254 testes anteriores com suas referências e executa ambos os grupos.
