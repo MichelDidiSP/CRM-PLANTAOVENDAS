@@ -10,8 +10,10 @@ A homologação atual parte da PR #12 (`5d356b2`). Os cinco motores e os 317 tes
 | Telefone desconhecido, Retorno escolhido manualmente | Selecionar original | Mantém o fallback manual |
 | Todos ausentes; cliente novo, decorado ou sem telefone | Sim, aguardar | Espera prioritária; primeiro corretor elegível que chegar, 100% |
 | Todos ausentes; cliente novo | Não aguardar | Base exclusiva da Incorporadora e fato quantitativo pelo RPC já existente |
-| Todos ausentes; retorno/indicação específica | Sim, aguardar original | Espera nominal; chegada do original atende diretamente com 100%; outro disponível gera proposta de Fifty |
-| Todos ausentes; retorno/indicação específica | Não aguardar original | Espera prioritária; solicita decisão com Fifty quando outro corretor estiver disponível |
+| Todos ausentes; retorno | Sim, aguardar original | Espera nominal; chegada do original atende diretamente com 100%; outro disponível gera proposta de Fifty |
+| Todos ausentes; retorno | Não aguardar original | Espera prioritária; solicita decisão com Fifty quando outro corretor estiver disponível |
+| Todos ausentes; indicação específica | Sim, aguardar original | Mantém a espera nominal e a ação explícita de mudança de opinião |
+| Todos ausentes; indicação específica | Não aguardar original | Mantém o despacho prioritário ao primeiro corretor elegível, com Fifty se for outro corretor |
 | Espera nominal; cliente mudou de ideia | Atender com outro | Último livre da equipe, depois da empresa, depois da outra empresa; Fifty |
 | Mudança de ideia, ainda sem presentes | Atender com outro | Converte para espera prioritária de chegada com Fifty |
 | Decorado/sem telefone em chamada inversa | Recusa pelo 1º/2º livre da empresa | Mantém a ordem direta, move apenas a inversa, chama próximo e audita |
