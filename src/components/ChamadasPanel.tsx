@@ -1,7 +1,8 @@
-import { dispatchOperationalEntry } from '@/lib/reception/operationalStore';
+import { attendanceLabel as attendanceTrace } from '@/lib/reception/commissionLabels';
+import { dispatchReceptionEntry } from '@/lib/reception/returnDecisionStore';
 import { actOnPause } from '@/lib/queue/pauseAndPartnersStore';
 import { getPlantaoTime, afterPlantaoDelay, plantaoClockParts } from '@/lib/plantaoClock';
-import { firstName, attendanceTrace } from '@/lib/reception/intake';
+import { firstName } from '@/lib/reception/intake';
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { Volume2, VolumeX, Timer, Users, Building2, Zap, Chrome as Home, ArrowLeftRight, TriangleAlert as AlertTriangle, History } from 'lucide-react';
 import { supabase, type Broker, type QueueEntry, type Agency } from '@/lib/supabase';
@@ -109,7 +110,7 @@ export default function ChamadasPanel({ queue, brokers }: Props) {
         try {
           const live = await fetchAll();
           if (live.error) throw live.error;
-          await dispatchOperationalEntry(entry, live.brokers, live.queue, clock, getPlantaoTime().toISOString());
+          await dispatchReceptionEntry(entry, live.brokers, live.queue, clock, getPlantaoTime().toISOString());
         } catch { setAutoRecallNotice('Não foi possível chamar o corretor. Cliente permanece aguardando.'); }
         return;
       }

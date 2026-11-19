@@ -27,6 +27,8 @@ jobs:
         run: git diff --exit-code 6ab3567a93e00b034edb3604c1139638005dc8ea HEAD -- src/modules/teste/closingAndReset.rpc.test.tsx src/modules/teste/resetTestPlantao.integration.test.tsx supabase/tests/direct_closing_and_test_reset.sql
       - name: Confirmar testes da PR 11 e ausência de novas migrações
         run: git diff --exit-code cef62a818d82387453224b92d911571b6670895f HEAD -- src/modules/teste/TestCustomers.integration.test.tsx supabase/tests/test_customers_safeupdate.sql supabase/migrations
+      - name: Confirmar testes e fixtures da PR 12
+        run: git diff --exit-code 5d356b25ca338ba29358a92ecdab6c2c3e2d050b HEAD -- src/modules/teste/receptionChoices.test.ts src/modules/teste/receptionFixtures.ts src/modules/teste/receptionOperations.integration.test.tsx src/modules/teste/receptionOperations.rpc.test.ts supabase/tests/reception_choices.sql
       - uses: actions/setup-node@v4
         with:
           node-version: '22'

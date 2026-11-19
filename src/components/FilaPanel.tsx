@@ -1,8 +1,10 @@
-import { dispatchOperationalEntry } from '@/lib/reception/operationalStore';
+import ReturnOfferPanel from './ReturnOfferPanel';
+import { attendanceLabel as attendanceTrace } from '@/lib/reception/commissionLabels';
+import { dispatchReceptionEntry } from '@/lib/reception/returnDecisionStore';
 import { actOnPause } from '@/lib/queue/pauseAndPartnersStore';
 import { useEffect, useRef } from 'react';
 import { getPlantaoTime, afterPlantaoDelay } from '@/lib/plantaoClock';
-import { firstName, attendanceTrace } from '@/lib/reception/intake';
+import { firstName } from '@/lib/reception/intake';
 import { Bell, CircleCheck as CheckCircle2, Eye, ArrowLeftRight, Clock, TriangleAlert as AlertTriangle, UserCheck, History, Chrome as Home, Repeat, Sun, Moon } from 'lucide-react';
 import { supabase, type Broker, type QueueEntry, type Agency } from '@/lib/supabase';
 import { fetchAll, markMeritReturns, concludeAttendance, isLateForSort, interleaveQueue, reverseInterleaveQueue, nextBrokerFromInverseQueue, nextBrokerForGeneralQueue, nextBrokerByArrival, nextBrokerFromInverseTop, moveBrokerToEndOfDirectQueue, moveBrokerToEndOfInverseQueue, dispatchBroker, isArrivalOrderMode, nextBrokerByArrivalAnyAgency, nextBrokerByArrivalInverse, ATENDIMENTO_MANHA_START, markBrokerInService, markStandardBrokerInService } from '@/lib/queueEngine';
@@ -14,9 +16,10 @@ type Props = {
   queue: QueueEntry[];
   brokers: Broker[];
   allQueue: QueueEntry[];
+  onChanged?: () => Promise<unknown>;
 };
 
-export default function FilaPanel({ queue, brokers, allQueue }: Props) {
+export default function FilaPanel({ queue, brokers, allQueue, onChanged }: Props) {
   const { isPreSorteio, currentShift, simSeconds, isExtendedShift, plantaoDate } = useSim();
   const recallCancel = useRef<(() => void) | undefined>();
   useEffect(() => () => recallCancel.current?.(), []);
@@ -73,7 +76,8 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
       const live = await fetchAll();
       if (live.error) throw live.error;
       const fresh = live.queue.find(row => row.id === entry.id);
-      if (fresh) await dispatchOperationalEntry(fresh, live.brokers, live.queue, clock, getPlantaoTime().toISOString());
+      if (fresh) await dispatchReceptionEntry(fresh, live.brokers, live.queue, clock, getPlantaoTime().toISOString());
+      await onChanged?.();
       return;
     }
     const lastCalledAgency = await getLastCalledAgency();
@@ -115,7 +119,7 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
     const live = await fetchAll();
     if (live.error) throw live.error;
     const fresh = live.queue.find(row => row.id === entry.id);
-    if (fresh) await dispatchOperationalEntry(fresh, live.brokers, live.queue, clock, getPlantaoTime().toISOString());
+    if (fresh) await dispatchReceptionEntry(fresh, live.brokers, live.queue, clock, getPlantaoTime().toISOString());
   }
 
   async function callParceria(entry: QueueEntry) {
@@ -194,6 +198,7 @@ export default function FilaPanel({ queue, brokers, allQueue }: Props) {
 
   return (
     <div className="space-y-6">
+      <ReturnOfferPanel brokers={brokers} queue={allQueue} onChanged={onChanged} />
       {/* Infinite intercalation info */}
       <div className="bg-slate-900 rounded-2xl border border-slate-800 p-5">
         <div className="flex items-start gap-3">

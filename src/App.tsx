@@ -280,7 +280,7 @@ function AppContent() {
         {view === 'recepcao' && !closed && <><ExternalPartnerPanel intakeRedirected={partnerIntakeRedirected} /><RecepcaoPanel brokers={brokers} visits={visits} queue={queue} onChanged={load} /></>}
         {view === 'chamadas' && !closed && <><ExternalPartnerPanel callsOnly /><ChamadasPanel queue={queue} brokers={brokers} /></>}
         {view === 'corretor' && !closed && <><CorretorPanel brokers={brokers} /><ExternalPartnerPanel managementOnly /></>}
-        {view === 'fila' && !closed && <FilaPanel queue={sortedQueue} brokers={brokers} allQueue={queue} />}
+        {view === 'fila' && !closed && <FilaPanel queue={sortedQueue} brokers={brokers} allQueue={queue} onChanged={load} />}
         {view === 'auditoria' && <AuditoriaPanel brokers={brokers.filter(b => !onlyOwn(b))} queue={queue} isAfternoonActive={isAfternoonActive} isMorningQueueActive={isMorningQueueActive} />}
       </main>
 

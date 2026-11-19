@@ -6,6 +6,7 @@ export default function ScheduledFilaPanel(props: {
   brokers: Broker[];
   queue: QueueEntry[];
   allQueue: QueueEntry[];
+  onChanged?: () => Promise<unknown>;
 }) {
   const { simSeconds, isExtendedShift, plantaoDate } = useSim();
   const clock = {
@@ -33,6 +34,7 @@ export default function ScheduledFilaPanel(props: {
   );
   return (
     <FilaPanel
+      onChanged={props.onChanged}
       brokers={brokers}
       queue={project(props.queue)}
       allQueue={project(props.allQueue)}

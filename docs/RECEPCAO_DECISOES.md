@@ -1,32 +1,41 @@
 # Decisões de recepção: retorno, espera e recusa
 
-Esta alteração parte da PR #11 (`cef62a8`). Os cinco motores e os 273 testes anteriores permanecem sem alterações. Não há migração SQL nova ou modificada.
+A homologação atual parte da PR #12 (`5d356b2`). Os cinco motores e os 317 testes anteriores permanecem sem alterações. Não há migração SQL nova ou modificada.
 
 ## Fluxo operacional
 
 | Situação | Decisão | Resultado |
 |---|---|---|
-| Telefone completo encontrado em `visits` | Automática | Retorno e corretor original identificados; não exige seleção manual |
+| Telefone completo encontrado em `visits` | Automática | Retorno, nome completo e corretor original preenchidos; nome editável e envio liberado |
 | Telefone desconhecido, Retorno escolhido manualmente | Selecionar original | Mantém o fallback manual |
 | Todos ausentes; cliente novo, decorado ou sem telefone | Sim, aguardar | Espera prioritária; primeiro corretor elegível que chegar, 100% |
 | Todos ausentes; cliente novo | Não aguardar | Base exclusiva da Incorporadora e fato quantitativo pelo RPC já existente |
-| Todos ausentes; retorno/indicação específica | Sim, aguardar original | Espera nominal exclusiva, 100% para o original |
-| Todos ausentes; retorno/indicação específica | Não aguardar original | Espera prioritária de chegada com Split quando outro corretor atender |
-| Espera nominal; cliente mudou de ideia | Atender com outro | Último livre da equipe, depois da empresa, depois da outra empresa; Split |
-| Mudança de ideia, ainda sem presentes | Atender com outro | Converte para espera prioritária de chegada com Split |
-| Decorado/sem telefone em chamada inversa | Recusa pelo 1º/2º direto da empresa | Mantém a ordem direta, move apenas a inversa, chama próximo e audita |
+| Todos ausentes; retorno/indicação específica | Sim, aguardar original | Espera nominal; chegada do original atende diretamente com 100%; outro disponível gera proposta de Fifty |
+| Todos ausentes; retorno/indicação específica | Não aguardar original | Espera prioritária; solicita decisão com Fifty quando outro corretor estiver disponível |
+| Espera nominal; cliente mudou de ideia | Atender com outro | Último livre da equipe, depois da empresa, depois da outra empresa; Fifty |
+| Mudança de ideia, ainda sem presentes | Atender com outro | Converte para espera prioritária de chegada com Fifty |
+| Decorado/sem telefone em chamada inversa | Recusa pelo 1º/2º livre da empresa | Mantém a ordem direta, move apenas a inversa, chama próximo e audita |
 
-Ausentes, pausados, ocupados, parceiros externos e corretores restritos a indicações não são alternativas gerais elegíveis. A espera nominal não impede o atendimento de outros clientes. Split não é aplicado contra o próprio corretor original se ele mesmo for o primeiro elegível.
+Ausentes, pausados, ocupados, parceiros externos e corretores restritos a indicações não são alternativas gerais elegíveis. A espera nominal não impede o atendimento de outros clientes. O candidato chamado para o Decorado está em `em_mesa` por causa da própria chamada; ele entra na contagem de livres, mas outros chamados, em atendimento, pausados e ausentes são excluídos. A ordem direta não é escrita pela recusa. A auditoria distingue posição direta e posição entre livres. Fifty não é aplicado contra o próprio corretor original se ele mesmo for o primeiro elegível.
 
-O telefone é normalizado antes da consulta. A busca aguarda a seleção do banco (`dbReady`), inclui visitas fictícias somente com relógio TESTE ativo e usa `visitOwner` do motor congelado para preservar o primeiro vínculo. Uma resposta assíncrona antiga não sobrescreve um telefone novo. O formulário é revalidado na submissão.
+O telefone é normalizado antes da consulta. A busca aguarda a seleção do banco (`dbReady`), inclui visitas fictícias somente com relógio TESTE ativo e usa `visitOwner` do motor congelado para preservar o primeiro vínculo. Uma resposta assíncrona antiga não sobrescreve um telefone novo. O nome cadastrado é preenchido e pode ser complementado; trocar o telefone limpa a identidade anterior. O formulário revalida a busca na submissão antes de exigir o nome.
 
 ## Organização e persistência
 
 - `returnLookup.ts`: consulta histórica da interface.
+- `commissionLabels.ts`: apresenta rótulos históricos de comissão como Fifty, sem mudar os campos técnicos nem o motor congelado.
+- `returnDecision.ts` / `returnDecisionStore.ts`: confirmação persistida antes dos despachos automáticos de retorno.
+- `ReturnOfferPanel.tsx`: proposta e resposta na Recepção e na Fila.
 - `operationalChoices.ts`: decisões adicionais e validação do direito de recusa; reutiliza a cobertura reversa do núcleo congelado.
 - `operationalStore.ts`: persistência, chamada pela RPC existente, mudança de opinião e recusa.
 - `ReceptionActions.tsx`: ações na Recepção, sem telefone no painel operacional.
 - `ReceptionAuditPanel.tsx`: eventos de espera, mudança de opinião e recusa.
+
+O despacho automático da agenda, da Recepção, da Fila e da reconvocação da TV passa por `dispatchReceptionEntry` / `dispatchWaitingWithDecisions`. As rotinas anteriores de execução continuam disponíveis para executar decisões já tomadas, inclusive a mudança de opinião explícita e a recusa de Decorado. A execução do motor por si só não constitui autorização automática para trocar o corretor de um retorno.
+
+O corretor original disponível é atendido diretamente com 100%, mesmo se houver oferta de outro corretor pendente. Na ausência dele, a hierarquia e o modo de espera selecionam uma alternativa. A oferta mostra **Atender Agora (Com Fifty)** e **Continuar Aguardando Original**. A aceitação é vinculada ao corretor mostrado e confere novamente disponibilidade e identificação da oferta. Uma oferta desatualizada nunca troca silenciosamente o corretor. Enquanto o cliente decide, não é gravada uma chamada nem marcado o corretor como ocupado.
+
+Ao continuar esperando, a escolha fica registrada e os corretores já disponíveis podem atender a fila normal. O mesmo intervalo de disponibilidade não gera alertas repetidos. Uma nova chegada/liberação pode gerar nova proposta, inclusive com o relógio virtual parado. A oferta e a resposta sobrevivem à atualização da página, em `returnConfirmation` no JSON existente.
 
 As decisões ficam no campo JSON **já existente** `plantao_sessions.schedule_data`, em registros `reception_<queue_entry_id>` com `kind: reception_v1` e `status: ended`. Não são sessões ativas nem sorteios. A agenda usa seus próprios IDs `schedule_*`. Esses registros não contêm nome ou telefone de cliente, sobrevivem à atualização da página e são removidos pelo reset diário existente.
 
@@ -37,7 +46,9 @@ Recusas e mudanças de opinião reservam a entrada com atualização condicional
 ## Validação
 
 - Suíte original preservada, mais testes de unidade, interface completa e contrato RPC em `src/modules/teste/reception*.test.*`.
-- `supabase/tests/reception_choices.sql` verifica, como `anon`, a persistência no JSON existente, o Split na equipe, a recusa sem alteração direta e a limpeza desses metadados pelo reset. É apenas um teste transacional com `ROLLBACK`.
+- `supabase/tests/reception_choices.sql` verifica, como `anon`, a persistência no JSON existente, o Fifty na equipe, a recusa sem alteração direta e a limpeza desses metadados pelo reset. É apenas um teste transacional com `ROLLBACK`.
 - CI mantém as proteções dos motores/testes antigos e verifica que `supabase/migrations` não mudou.
 
 Para conferir na tela: ativar TESTE às 08:30, cadastrar cliente antes da chegada, escolher Sim/Não e registrar presença no painel do corretor. Para retorno, usar no formulário o telefone de uma visita com corretor identificado no quadro TESTE. Após o sorteio, chamar um Decorado e conferir o direito de recusa na Recepção e o evento na Auditoria.
+
+Os novos testes `fiftyDecision.test.ts` e `fiftyReception.integration.test.tsx` cobrem nome automático/editável, posições entre livres, propostas, aceitação/recusa, retomada após atualização, retorno do original, clique duplicado, perda de disponibilidade, Fila, agenda e reconvocação da TV. Nenhum arquivo SQL foi alterado nesta rodada.

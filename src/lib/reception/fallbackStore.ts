@@ -1,4 +1,4 @@
-import { dispatchOperationalWaiting } from './operationalStore';
+import { dispatchWaitingWithDecisions } from './returnDecisionStore';
 import { dbReady, supabase, type QueueEntry, type Broker, type VisitReason, type Shift } from '../supabase';
 import { markBrokerInService, markStandardBrokerInService } from '../queueEngine';
 import { partnerIntake, type PartnerIntake } from '../queue/pauseAndPartners';
@@ -43,7 +43,7 @@ export async function claimReceptionCall(entry: QueueEntry, broker: Broker, spli
 }
 
 export async function dispatchGeneralWaiting(queue: QueueEntry[], brokers: Broker[], clock: ScheduleClock, at: string) {
-  return dispatchOperationalWaiting(queue, brokers, clock, at);
+  return dispatchWaitingWithDecisions(queue, brokers, clock, at);
 }
 
 export async function savePartnerReception(
