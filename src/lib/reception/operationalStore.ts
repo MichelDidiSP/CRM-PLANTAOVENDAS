@@ -3,7 +3,7 @@ import { dispatchBroker, fetchAll } from '../queueEngine';
 import type { ScheduleClock } from '../queue/shiftSchedule';
 import { busyReceptionIds } from './fallbackOrchestrator';
 import { claimReceptionCall } from './fallbackStore';
-import { allBrokersAbsent, canRefuseInverse, directPosition, operationalDispatch, originalBrokerId,
+import { allBrokersAbsent, canRefuseInverse, directPosition, freeDirectPosition, operationalDispatch, originalBrokerId,
   type ManagedEntry, type ReceptionPolicy, type WaitingMode } from './operationalChoices';
 
 const policyId = (id: string) => `reception_${id}`;
@@ -75,6 +75,12 @@ export async function dispatchOperationalEntry(entry: QueueEntry, brokers: Broke
   const busy = busyReceptionIds(queue);
   const choice = operationalDispatch(entry, brokers, clock, busy, policy, engine ?? (() =>
     dispatchBroker(brokers, entry.reception_waiting ? 'geral' : entry.queue_type, clock.seconds, busy, null, originalBrokerId(entry)).broker));
+  return claimOperationalChoice(entry, brokers, clock, at, choice, policy);
+}
+
+/** Execution primitive, also used after an explicit, revalidated return decision. */
+export async function claimOperationalChoice(entry: QueueEntry, brokers: Broker[], clock: ScheduleClock, at: string,
+  choice: ReturnType<typeof operationalDispatch>, policy?: ReceptionPolicy): Promise<boolean> {
   if (!choice.broker) return false;
   const owner = brokers.find(b => b.id === (policy?.ownerId ?? originalBrokerId(entry)));
   if (choice.rule && !policy) {
@@ -98,6 +104,7 @@ export async function dispatchOperationalEntry(entry: QueueEntry, brokers: Broke
   return true;
 }
 
+/** Execution-only helper. Automatic screen callers use dispatchWaitingWithDecisions. */
 export async function dispatchOperationalWaiting(queue: QueueEntry[], brokers: Broker[], clock: ScheduleClock, at: string) {
   const waiting = queue.filter(e => e.reception_waiting && e.queue_status === 'aguardando')
     .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
@@ -150,10 +157,11 @@ export async function refuseInverseCall(id: string, clock: ScheduleClock, at: st
   const policy = await readReceptionPolicy(id);
   if (expected && (live.entry.broker_id !== expected.broker_id || live.entry.called_at !== expected.called_at))
     throw new Error('A chamada foi alterada. Atualize a tela antes de recusar.');
-  if (!canRefuseInverse({ ...live.entry, reception_policy: policy }, live.brokers))
-    throw new Error('Recusa permitida apenas ao 1º ou 2º da fila direta da empresa, antes de iniciar o atendimento.');
+  if (!canRefuseInverse({ ...live.entry, reception_policy: policy }, live.brokers, live.queue))
+    throw new Error('Recusa permitida apenas ao 1º ou 2º livre da fila direta da empresa, antes de iniciar o atendimento.');
   const broker = live.brokers.find(b => b.id === live.entry.broker_id)!;
   const position = directPosition(broker, live.brokers);
+  const freePosition = freeDirectPosition(live.entry, live.brokers, live.queue);
   // Compare-and-set prevents duplicate refusals and a late click after another
   // operator has already confirmed the call. The reserved row is not dispatchable.
   const lock = await supabase.from('queue_entries').update({ queue_status: 'ausente' })
@@ -164,7 +172,7 @@ export async function refuseInverseCall(id: string, clock: ScheduleClock, at: st
   try {
     const next = { ...(policy ?? newReceptionPolicy(id, null)),
       refusedIds: [...(policy?.refusedIds ?? []), broker.id],
-      events: [...(policy?.events ?? []), { type: 'inverse_refusal' as const, brokerId: broker.id, position, at }] };
+      events: [...(policy?.events ?? []), { type: 'inverse_refusal' as const, brokerId: broker.id, position, freePosition, at }] };
     if (policy) await updatePolicy(next); else await createReceptionPolicy(next, clock.date!, at);
     recorded = true;
     const inverseEnd = Math.max(0, ...live.brokers.filter(b => !b.is_external_partner).map(b => b.inverse_order ?? 0)) + 1;

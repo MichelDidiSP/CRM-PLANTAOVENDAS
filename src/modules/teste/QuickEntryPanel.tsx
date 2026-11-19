@@ -246,7 +246,7 @@ export default function QuickEntryPanel({ brokers, visits, queue, disabled, onCh
               {isIndicacaoAusente && (
                 <span className="flex items-center gap-1.5 text-xs bg-orange-500/10 text-orange-400 px-3 py-1.5 rounded-lg">
                   <UserX className="h-3.5 w-3.5" />
-                  Hierarquia: Mesma Equipe → Mesma Empresa. Posição protegida (Indicação Dividida 50/50).
+                  Hierarquia: Mesma Equipe → Mesma Empresa. Posição protegida (Indicação com Fifty (50/50)).
                 </span>
               )}
               {isIndicacaoImobiliaria && (

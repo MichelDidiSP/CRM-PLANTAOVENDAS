@@ -1,10 +1,12 @@
+import { dispatchReceptionEntry } from '@/lib/reception/returnDecisionStore';
+import { attendanceLabel as attendanceTrace } from '@/lib/reception/commissionLabels';
 import { isVirtualClockActive } from '@/lib/plantaoClock';
 import { lookupReceptionReturn } from '@/lib/reception/returnLookup';
 import { absenceDecision, allBrokersAbsent, type WaitingMode } from '@/lib/reception/operationalChoices';
-import { createReceptionPolicy, newReceptionPolicy, removeReceptionPolicy, dispatchOperationalEntry } from '@/lib/reception/operationalStore';
+import { createReceptionPolicy, newReceptionPolicy, removeReceptionPolicy } from '@/lib/reception/operationalStore';
 import ReceptionActions from './ReceptionActions';
 import { MEDIA_CHANNELS, mediaChannelFields } from '@/lib/reports/shiftClosingReport';
-import { normalizePhone, maskPhone, firstName, intakeRoute, recentVisits, attendanceTrace } from '@/lib/reception/intake';
+import { normalizePhone, maskPhone, firstName, intakeRoute, recentVisits } from '@/lib/reception/intake';
 import { onlyOwn } from '@/lib/queue/pauseAndPartners';
 import { scheduleAt, preOpeningChoice } from '@/lib/queue/shiftSchedule';
 import { useState, useRef, useMemo, useEffect } from 'react';
@@ -35,21 +37,24 @@ export default function RecepcaoPanel({ brokers, visits, queue, onChanged }: Pro
   const [returnMatch, setReturnMatch] = useState<Awaited<ReturnType<typeof lookupReceptionReturn>>>(null);
   const submitLock = useRef(false);
   const automaticOwner = useRef<string | null>(null);
+  const nameEditVersion = useRef(0);
   const testing = isVirtualClockActive();
   const [lookupPending, setLookupPending] = useState(false);
   const [waitChoice, setWaitChoice] = useState<boolean | null>(null);
   useEffect(() => {
     let active = true;
+    const nameVersion = nameEditVersion.current;
     setReturnMatch(null);
     if (automaticOwner.current) {
       setReason('Primeira visita'); setReferredBrokerId(''); setSelectedBroker(null); setBrokerSearch('');
-      automaticOwner.current = null;
+      automaticOwner.current = null; setCustomerName('');
     }
     setLookupPending(true);
     lookupReceptionReturn(noPhone ? '' : phone, testing).then(match => {
       if (!active) return;
       setReturnMatch(match);
       if (match) { automaticOwner.current = match.ownerId; setReason('Retorno'); setReferredBrokerId(match.ownerId);
+        if (nameEditVersion.current === nameVersion) setCustomerName(match.visit.customer_name);
         const owner = brokers.find(b => b.id === match.ownerId);
         setSelectedBroker(owner ?? null); setBrokerSearch(owner?.operational_name ?? '');
       }
@@ -138,7 +143,7 @@ export default function RecepcaoPanel({ brokers, visits, queue, onChanged }: Pro
     if (!isArrivalOrderDispatchActive(simSeconds, isExtendedShift) || !ownerId) return;
     if (brokers.some(b => b.id === ownerId && onlyOwn(b))) return;
     if (!preOpeningChoice(brokers, ownerId).needsChoice) return;
-    return window.confirm('O corretor original ainda não chegou. Deseja aguardar exclusivamente por ele? OK para aguardar; Cancelar para seguir a cobertura por equipe, empresa e outra empresa com Split.') ? 'nominal' : 'coverage';
+    return window.confirm('O corretor original ainda não chegou. Deseja aguardar exclusivamente por ele? OK para aguardar; Cancelar para seguir a cobertura por equipe, empresa e outra empresa com Fifty.') ? 'nominal' : 'coverage';
   }
 
   function clearForm() { setCustomerName(''); setMediaChannel(''); setMediaChannelDetail(''); setPhone(''); setNoPhone(false); setReason('Primeira visita'); setReferredBrokerId(''); setSelectedBroker(null); setBrokerSearch(''); setReturnMatch(null); setWaitChoice(null); }
@@ -147,7 +152,6 @@ export default function RecepcaoPanel({ brokers, visits, queue, onChanged }: Pro
     e.preventDefault();
     if (submitLock.current) return;
     setMessage(null);
-    if (!customerName.trim()) { setMessage({ type: 'error', text: 'Informe o nome do cliente.' }); return; }
     if (!scheduleAt({ seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate }).acceptingClients) { setMessage({ type: 'warning', text: 'Entrada de novos clientes encerrada.' }); return; }
     submitLock.current = true;
     setSubmitting(true);
@@ -155,6 +159,8 @@ export default function RecepcaoPanel({ brokers, visits, queue, onChanged }: Pro
     let policyEntryId: string | null = null;
     try {
       const previous = await lookupReceptionReturn(noPhone ? '' : phone, testing);
+      const submittedName = customerName.trim() || previous?.visit.customer_name.trim();
+      if (!submittedName) throw new Error('Informe o nome do cliente.');
       const route = intakeRoute(phone, noPhone, reason, referredBrokerId || null, previous);
       if (['Indicação', 'Retorno'].includes(route.visit_reason) && !route.referred_broker_id) throw new Error('Selecione o corretor original.');
       let waitingMode: WaitingMode | undefined;
@@ -171,7 +177,7 @@ export default function RecepcaoPanel({ brokers, visits, queue, onChanged }: Pro
       const timestamp = getCurrentTime().toISOString();
       const media = mediaChannelFields(mediaChannel, mediaChannelDetail);
       if (destination === 'direct') {
-        await saveDirectLead({ ...media, customer_name: customerName.trim(), phone: route.phone,
+        await saveDirectLead({ ...media, customer_name: submittedName, phone: route.phone,
           visit_reason: route.visit_reason, created_at: timestamp, shift: currentShift, is_test: testing });
         setMessage({ type: 'success', text: 'Cliente cadastrado na base da Incorporadora.' });
       } else {
@@ -181,7 +187,7 @@ export default function RecepcaoPanel({ brokers, visits, queue, onChanged }: Pro
         }
         const { queue_type: originalQueueType, ...visit } = route;
         const queue_type: QueueEntry['queue_type'] = route.visit_reason === 'Parceria' ? 'parceria' : originalQueueType === 'decorado' ? 'decorado' : 'geral';
-        const result = await supabase.from('visits').insert({ ...visit, ...media, customer_name: customerName.trim(), pre_opening_assignee: null, status: 'aguardando', created_at: timestamp, is_test: testing }).select().single();
+        const result = await supabase.from('visits').insert({ ...visit, ...media, customer_name: submittedName, pre_opening_assignee: null, status: 'aguardando', created_at: timestamp, is_test: testing }).select().single();
         if (result.error || !result.data) throw result.error || new Error('Não foi possível cadastrar a visita.');
         createdId = result.data.id;
         const queueId = crypto.randomUUID();
@@ -194,11 +200,11 @@ export default function RecepcaoPanel({ brokers, visits, queue, onChanged }: Pro
         createdId = null; policyEntryId = null;
         clearForm();
         if (waitingMode || destination === 'normal' && route.referred_broker_id) {
-          await dispatchOperationalEntry({ ...queued.data, visit: result.data }, brokers, queue, clock, timestamp);
+          await dispatchReceptionEntry({ ...queued.data, visit: result.data }, brokers, queue, clock, timestamp);
         }
         setMessage({ type: 'success', text: destination === 'waiting'
           ? waitingMode === 'nominal' ? 'Cliente aguardando exclusivamente o corretor original.' : waitingMode === 'arrival' ? 'Cliente na espera prioritária de chegada.' : 'Cliente cadastrado na Fila de Espera Geral.'
-          : `${firstName(customerName)} entrou na fila como ${route.visit_reason}.` });
+          : `${firstName(submittedName)} entrou na fila como ${route.visit_reason}.` });
       }
       clearForm();
       await onChanged?.();
@@ -256,7 +262,7 @@ export default function RecepcaoPanel({ brokers, visits, queue, onChanged }: Pro
               <input
                 type="text"
                 value={customerName}
-                onChange={(e) => setCustomerName(e.target.value)}
+                onChange={(e) => { nameEditVersion.current += 1; setCustomerName(e.target.value); }}
                 placeholder="Nome completo"
                 className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-amber-500 transition"
               />
@@ -550,7 +556,7 @@ export default function RecepcaoPanel({ brokers, visits, queue, onChanged }: Pro
               <label className="block text-sm"><input type="radio" name="absence-wait" checked={waitChoice === true} onChange={() => setWaitChoice(true)} /> Sim</label>
               <label className="block text-sm"><input type="radio" name="absence-wait" checked={waitChoice === false} onChange={() => setWaitChoice(false)} /> Não</label>
               <p className="text-xs text-slate-400">{choiceOwner
-                ? 'Sim: espera exclusiva pelo corretor original, com 100% da comissão. Não: primeiro corretor que chegar, com Split.'
+                ? 'Sim: espera exclusiva pelo corretor original, com 100% da comissão. Não: primeiro corretor que chegar, com Fifty.'
                 : 'Sim: primeiro corretor que chegar, com 100% da comissão. Não: cadastro exclusivo na Incorporadora.'}</p>
             </fieldset>}
             {lookupPending && <p role="status" className="text-sm text-slate-400">Consultando histórico do telefone…</p>}

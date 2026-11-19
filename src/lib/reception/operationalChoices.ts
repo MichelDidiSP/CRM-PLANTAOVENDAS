@@ -5,11 +5,13 @@ import type { ScheduleClock } from '../queue/shiftSchedule';
 import { isReceptionFree, receptionRoster, resolveReceptionDispatch } from './fallbackOrchestrator';
 
 export type WaitingMode = 'arrival' | 'nominal' | 'coverage';
-export type ReceptionEvent = { at: string; type: 'waiting' | 'changed_mind' | 'inverse_refusal'; brokerId?: string; position?: number };
+export type ReceptionEvent = { at: string; type: 'waiting' | 'changed_mind' | 'inverse_refusal' | 'return_offered' | 'return_accepted' | 'return_kept_original'; brokerId?: string; position?: number; freePosition?: number };
+export type ReturnOffer = { id: string; brokerId: string; availability: string; at: string };
 /** Stored separately from the frozen engines, in the existing session JSON column. */
 export type ReceptionPolicy = {
   kind: 'reception_v1'; entryId: string; mode?: WaitingMode; ownerId: string | null;
   refusedIds: string[]; events: ReceptionEvent[];
+  returnConfirmation?: { offer?: ReturnOffer; declined?: Record<string, string> };
 };
 export type ManagedEntry = QueueEntry & { reception_policy?: ReceptionPolicy };
 
@@ -29,11 +31,23 @@ export function directPosition(broker: Broker, brokers: Broker[]): number {
     .sort((a, b) => a.sorteio_order! - b.sorteio_order! || a.id.localeCompare(b.id));
   return line.findIndex(b => b.id === broker.id) + 1;
 }
-export function canRefuseInverse(entry: ManagedEntry, brokers: Broker[]): boolean {
+export function freeDirectPosition(entry: QueueEntry, brokers: Broker[], queue: QueueEntry[] = []): number {
+  const candidate = brokers.find(b => b.id === entry.broker_id);
+  if (!candidate || entry.queue_status !== 'chamando' || candidate.presence_status !== 'presente' ||
+    !['livre', 'em_mesa'].includes(candidate.attendance_status)) return 0;
+  const busy = new Set(queue.filter(e => e.id !== entry.id && ['chamando', 'em_atendimento'].includes(e.queue_status))
+    .map(e => e.broker_id));
+  // The candidate is em_mesa only because of THIS pending call. Include him at
+  // his unchanged direct rank, excluding all other busy/paused/absent brokers.
+  return directPosition(candidate, brokers.filter(b => b.presence_status === 'presente' &&
+    b.shift === candidate.shift && !busy.has(b.id) &&
+    (b.id === candidate.id || b.attendance_status === 'livre')));
+}
+export function canRefuseInverse(entry: ManagedEntry, brokers: Broker[], queue: QueueEntry[] = []): boolean {
   const broker = brokers.find(b => b.id === entry.broker_id);
   if (!broker || entry.queue_status !== 'chamando' || entry.queue_type !== 'decorado' ||
     originalBrokerId(entry) || entry.reception_policy?.mode || entry.reception_policy?.refusedIds.includes(broker.id)) return false;
-  return [1, 2].includes(directPosition(broker, brokers));
+  return [1, 2].includes(freeDirectPosition(entry, brokers, queue));
 }
 
 export function operationalDispatch(entry: QueueEntry, brokers: Broker[], clock: ScheduleClock,
