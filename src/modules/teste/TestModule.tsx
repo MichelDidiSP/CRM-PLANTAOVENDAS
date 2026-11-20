@@ -44,6 +44,7 @@ function TestControls({ brokers, visits, queue, closed, onChanged, runMaintenanc
       className={`rounded-lg px-4 py-2 text-sm font-bold ${enabled ? 'bg-amber-400 text-slate-950' : 'bg-slate-800 text-amber-300'}`}
       onClick={() => { toggle(); setConfirmReset(false); }}>TESTE</button>
     {enabled && <section id="test-module" aria-label="Módulo TESTE" className="mt-3 space-y-4 rounded-2xl border border-amber-500/30 bg-slate-900 p-4">
+      <div role="region" aria-label="Controles de tempo do TESTE" className="sticky top-0 z-40 space-y-4 bg-slate-900">
       <p className="text-sm text-amber-300">Modo TESTE ativo · relógio virtual · mesma base e motor do plantão.</p>
       <fieldset disabled={resetting} className="flex flex-wrap items-end gap-3">
         <label className="text-sm">Relógio virtual
@@ -58,6 +59,7 @@ function TestControls({ brokers, visits, queue, closed, onChanged, runMaintenanc
         <button type="button" aria-pressed={testMode} onClick={() => clock.setFast(!testMode)} className="rounded bg-slate-800 px-3 py-2">{testMode ? 'Chamadas: 10 segundos' : 'Chamadas: 2 minutos'}</button>
         <button type="button" onClick={() => setConfirmReset(true)} className="rounded bg-red-500/20 px-3 py-2 text-red-300 disabled:opacity-50">Reiniciar Plantão</button>
       </fieldset>
+      </div>
       {closed && <p className="text-amber-300">Plantão fechado. Reinicie o teste para realizar novas entradas.</p>}
       {error && <p role="alert" className="text-red-300">{error}</p>}
       <QuickEntryPanel key={resetVersion} brokers={brokers} visits={visits} queue={queue} disabled={closed || resetting} onChanged={onChanged} />

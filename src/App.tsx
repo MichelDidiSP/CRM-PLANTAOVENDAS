@@ -20,7 +20,7 @@ import { SimProvider, useSim } from '@/lib/simContext';
 
 import RecepcaoPanel from '@/components/RecepcaoPanel';
 import TestModule from '@/modules/teste/TestModule';
-import TestSession from '@/modules/teste/TestSession';
+import TestSession, { useTestSession } from '@/modules/teste/TestSession';
 import { getPlantaoTime, isVirtualClockActive, plantaoClockParts, publishClock } from '@/lib/plantaoClock';
 import ChamadasPanel from '@/components/ChamadasPanel';
 import CorretorPanel from '@/components/CorretorPanel';
@@ -29,6 +29,7 @@ import FilaPanel from '@/components/ScheduledFilaPanel';
 type View = 'recepcao' | 'chamadas' | 'corretor' | 'fila' | 'auditoria';
 
 function AppContent() {
+  const testSession = useTestSession();
   const { clockDisplay, testMode, sorteioTriggered, simSeconds, currentShift, isWeekday, plantaoDate, isPreSorteio, isCheckinOpen, isAtendimentoActive, isShiftTransition, isAfternoonActive, isMorningQueueActive, isExtendedShift, getCurrentTime } = useSim();
   const schedule = scheduleAt({ seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate });
   const [morningDraw, setMorningDraw] = useState<ShiftDraw | null>(null);
@@ -226,7 +227,7 @@ function AppContent() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
-      <header className="bg-slate-900/80 backdrop-blur border-b border-slate-800 sticky top-0 z-50">
+      <header className={`bg-slate-900/80 backdrop-blur border-b border-slate-800 ${testSession?.enabled ? '' : 'sticky top-0 z-50'}`}>
         <div className="max-w-7xl mx-auto px-4 sm:px-6">
           <div className="flex flex-col gap-2 py-2">
             {/* Title row */}
