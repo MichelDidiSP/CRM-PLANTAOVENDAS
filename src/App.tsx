@@ -20,8 +20,7 @@ import { SimProvider, useSim } from '@/lib/simContext';
 
 import RecepcaoPanel from '@/components/RecepcaoPanel';
 import TestModule from '@/modules/teste/TestModule';
-import TestSession, { useTestSession } from '@/modules/teste/TestSession';
-import { getPlantaoTime, isVirtualClockActive, plantaoClockParts, publishClock } from '@/lib/plantaoClock';
+import { isVirtualClockActive } from '@/lib/plantaoClock';
 import ChamadasPanel from '@/components/ChamadasPanel';
 import CorretorPanel from '@/components/CorretorPanel';
 import FilaPanel from '@/components/ScheduledFilaPanel';
@@ -29,7 +28,6 @@ import FilaPanel from '@/components/ScheduledFilaPanel';
 type View = 'recepcao' | 'chamadas' | 'corretor' | 'fila' | 'auditoria';
 
 function AppContent() {
-  const testSession = useTestSession();
   const { clockDisplay, testMode, sorteioTriggered, simSeconds, currentShift, isWeekday, plantaoDate, isPreSorteio, isCheckinOpen, isAtendimentoActive, isShiftTransition, isAfternoonActive, isMorningQueueActive, isExtendedShift, getCurrentTime } = useSim();
   const schedule = scheduleAt({ seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate });
   const [morningDraw, setMorningDraw] = useState<ShiftDraw | null>(null);
@@ -49,13 +47,6 @@ function AppContent() {
   const maintenanceRunning = useRef(false);
   const scheduleTask = useRef<Promise<void> | null>(null);
   const pollRef = useRef<number | undefined>(undefined);
-  const loadVersion = useRef(0);
-  const appliedLoadVersion = useRef(0);
-  const alive = useRef(true);
-  useEffect(() => {
-    alive.current = true;
-    return () => { alive.current = false; appliedLoadVersion.current = ++loadVersion.current; };
-  }, []);
 
   const [loadError, setLoadError] = useState<string | null>(null);
   const [dbConnected, setDbConnected] = useState<boolean | null>(null);
@@ -66,52 +57,46 @@ function AppContent() {
   useEffect(() => { dbReady.then((isReal) => setDbConnected(isReal)); }, []);
 
   const load = useCallback(async () => {
-    const request = ++loadVersion.current;
-    const day = plantaoClockParts(getPlantaoTime()).plantaoDate;
-    const virtual = isVirtualClockActive();
-    const current = () => alive.current && request > appliedLoadVersion.current &&
-      day === plantaoClockParts(getPlantaoTime()).plantaoDate && virtual === isVirtualClockActive();
-    try {
-      const [data, dayClosed, draws] = await Promise.all([
-        fetchAll(), isPlantaoClosed(day), supabase.from('plantao_sessions').select('*').eq('plantao_date', day),
-      ]);
-      if (!current()) return;
-      if (data.error) throw new Error('Não foi possível conectar ao banco de dados. Verifique a conexão e tente novamente.');
-      if (draws.error) throw new Error('Não foi possível carregar os sorteios.');
-      data.queue = attachReceptionPolicies(data.queue, draws.data ?? []);
-      await Promise.all(data.queue.map(entry => synchronizeReceptionTrace(entry, data.brokers)));
-      if (!current()) return;
-      const morning = draws.data?.find((e: { id: string }) => e.id === `schedule_${day}_morning`)?.schedule_data;
-      const afternoon = draws.data?.find((e: { id: string }) => e.id === `schedule_${day}_afternoon`)?.schedule_data;
-      data.activeSession = (draws.data ?? []).filter((s: PlantaoSession) => s.status === 'active')
-        .sort((a: PlantaoSession, b: PlantaoSession) => b.started_at.localeCompare(a.started_at))[0] ?? null;
-      // Publish one coherent successful read. Keep the displayed state during
-      // reloads/errors, and never let an older day or request overwrite it.
-      // A later request still in flight must not starve successful slow reads.
-      appliedLoadVersion.current = request;
-      setLoadError(null); setClosedDay(dayClosed ? day : null);
-      setBrokers(data.brokers); setVisits(data.visits); setQueue(data.queue); setActiveSession(data.activeSession);
-      setMorningDraw(hasDrawParticipants(morning) ? morning : null);
-      setAfternoonDraw(hasDrawParticipants(afternoon) ? afternoon : null);
+    const data = await fetchAll();
+    let dayClosed: boolean;
+    try { dayClosed = await isPlantaoClosed(plantaoDate); }
+    catch (error) {
+      setLoadError(error instanceof Error ? error.message : 'Não foi possível consultar o fechamento do plantão.');
       setLoading(false);
-      return dayClosed ? undefined : data;
-    } catch (error) {
-      if (current()) {
-        appliedLoadVersion.current = request;
-        setLoadError(error instanceof Error ? error.message : 'Não foi possível carregar o plantão.');
-        setLoading(false);
-      }
+      return;
     }
+    setClosedDay(dayClosed ? plantaoDate : null);
+    if (data.error) {
+      setLoadError('Não foi possível conectar ao banco de dados. Verifique a conexão e tente novamente.');
+      setLoading(false);
+      return;
+    }
+    setLoadError(null);
+    setBrokers(data.brokers);
+    setVisits(data.visits);
+    setActiveSession(data.activeSession);
+    const draws = await supabase.from('plantao_sessions').select('*').eq('plantao_date', plantaoDate);
+    if (draws.error) { setLoadError('Não foi possível carregar os sorteios.'); setLoading(false); return; }
+    data.queue = attachReceptionPolicies(data.queue, draws.data ?? []);
+    try {
+      await Promise.all(data.queue.map(entry => synchronizeReceptionTrace(entry, data.brokers)));
+    } catch (error) {
+      setLoadError(`Não foi possível concluir o registro do atendimento: ${error instanceof Error ? error.message : String(error)}`);
+      setLoading(false); return;
+    }
+    setQueue(data.queue);
+    const morning = draws.data?.find((e: { id: string }) => e.id === `schedule_${plantaoDate}_morning`)?.schedule_data;
+    const afternoon = draws.data?.find((e: { id: string }) => e.id === `schedule_${plantaoDate}_afternoon`)?.schedule_data;
+    setMorningDraw(hasDrawParticipants(morning) ? morning : null);
+    setAfternoonDraw(hasDrawParticipants(afternoon) ? afternoon : null);
+    setLoading(false);
+    return dayClosed ? undefined : data;
   }, [plantaoDate]);
 
   useEffect(() => {
     let mounted = true;
     load();
     pollRef.current = window.setInterval(() => { if (mounted) load(); }, 3000);
-    const resume = () => { if (mounted) { publishClock(); void load(); } };
-    const visible = () => { if (document.visibilityState === 'visible') resume(); };
-    window.addEventListener('focus', resume);
-    document.addEventListener('visibilitychange', visible);
 
     const channel = supabase
       .channel('plantao-realtime')
@@ -123,8 +108,6 @@ function AppContent() {
     return () => {
       mounted = false;
       if (pollRef.current) window.clearInterval(pollRef.current);
-      window.removeEventListener('focus', resume);
-      document.removeEventListener('visibilitychange', visible);
       supabase.removeChannel(channel);
     };
   }, [load]);
@@ -227,7 +210,7 @@ function AppContent() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
-      <header className={`bg-slate-900/80 backdrop-blur border-b border-slate-800 ${testSession?.enabled ? '' : 'sticky top-0 z-50'}`}>
+      <header className={`bg-slate-900/80 backdrop-blur border-b border-slate-800 ${isVirtualClockActive() ? '' : 'sticky top-0 z-50'}`}>
         <div className="max-w-7xl mx-auto px-4 sm:px-6">
           <div className="flex flex-col gap-2 py-2">
             {/* Title row */}
@@ -481,8 +464,8 @@ function AuditoriaPanel({ brokers, queue, isAfternoonActive, isMorningQueueActiv
 
 export default function App() {
   return (
-    <TestSession><SimProvider>
+    <SimProvider>
       <AppContent />
-    </SimProvider></TestSession>
+    </SimProvider>
   );
 }

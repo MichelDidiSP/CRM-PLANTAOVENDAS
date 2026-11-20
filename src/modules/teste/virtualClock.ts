@@ -13,7 +13,6 @@ export function createVirtualClock() {
     start() {
       let stored: string | null = null;
       try { stored = localStorage.getItem('plantao_test_timestamp'); } catch { /* no storage */ }
-      try { source.callDuration = localStorage.getItem('plantao_test_call_duration') === '10' ? 10 : 120; } catch { /* no storage */ }
       const date = plantaoClockParts(new Date()).plantaoDate;
       time = stored && Number.isFinite(Number(stored)) ? Number(stored) : Date.parse(`${date}T08:30:00-03:00`);
       anchor = Date.now();
@@ -22,12 +21,7 @@ export function createVirtualClock() {
         try { localStorage.setItem('plantao_test_timestamp', String(source.now())); } catch { /* no storage */ }
       };
       const unsubscribe = subscribeClock(persist);
-      window.addEventListener('pagehide', persist);
-      document.addEventListener('visibilitychange', persist);
-      return () => {
-        persist(); unsubscribe(); window.removeEventListener('pagehide', persist);
-        document.removeEventListener('visibilitychange', persist); stop();
-      };
+      return () => { persist(); unsubscribe(); stop(); };
     },
     setTime(input: string) {
       if (!/^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/.test(input)) return;
@@ -41,11 +35,7 @@ export function createVirtualClock() {
       if (Number.isFinite(timestamp)) set(timestamp);
     },
     addMinute() { set(source.now() + 60000); },
-    setFast(on: boolean) {
-      source.callDuration = on ? 10 : 120;
-      try { localStorage.setItem('plantao_test_call_duration', String(source.callDuration)); } catch { /* no storage */ }
-      publishClock();
-    },
+    setFast(on: boolean) { source.callDuration = on ? 10 : 120; publishClock(); },
     reset() {
       const date = plantaoClockParts(new Date(source.now())).plantaoDate;
       set(Date.parse(`${date}T08:30:00-03:00`));
