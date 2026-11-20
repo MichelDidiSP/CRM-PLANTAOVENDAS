@@ -1,6 +1,18 @@
 # Decisões de recepção: retorno, espera e recusa
 
-A homologação atual parte da PR #12 (`5d356b2`). Os cinco motores e os 317 testes anteriores permanecem sem alterações. Não há migração SQL nova ou modificada.
+A homologação atual parte da PR #13 (`995c296`). Os cinco motores e os 357 testes anteriores permanecem sem alterações. Não há migração SQL nova ou modificada.
+
+## Recusa reversa e retorno à aba
+
+A verificação de recusa lê `companyLine` (a mesma ordem direta já existente da empresa), filtra presentes elegíveis e livres e verifica se o chamado é o 1º ou 2º desse recorte. O candidato reservado pela própria chamada está em `em_mesa`, ainda sem iniciar atendimento; somente ele é considerado nessa condição. Outras chamadas, atendimentos, pausas, restrições e saída após atendimento são excluídos. A consulta não escreve posições ou ponteiros.
+
+O painel Motor da Fila passa a apresentar as mesmas decisões da Recepção e recarrega imediatamente depois de “Chamar do decorado”. Antes, a rotina gravava a chamada, mas essa tela não apresentava a recusa e dependia do polling para atualizar os dados. A aplicação usa o rótulo “Recusar (Ir para o Fim da Fila Reversa)”; a configuração padrão dos componentes independentes mantém o rótulo anterior para compatibilidade. A ação continua chamando `refuseInverseCall`, sem alterações nessa rotina: preserva a direta, move apenas a inversa, repassa a chamada e audita.
+
+`src/modules/teste/TestSession.tsx` é o responsável pelo estado ativo do TESTE e pela instalação do relógio virtual. A preferência `plantao_test_enabled`, o horário `plantao_test_timestamp` e a duração das chamadas ficam em localStorage. A inicialização restaura essa fonte antes de montar a aplicação e consultar o banco. Desmontar o painel ou alternar abas não grava a preferência como desativada; somente o botão TESTE a altera. O relógio também salva o instante em `visibilitychange` e `pagehide`.
+
+Ao receber `focus` ou voltar a ficar visível, a aplicação publica o relógio ativo e recarrega os dados. Sorteios, sessão ativa e fechamento são consultados para a data desse relógio. Enquanto aguarda ou em caso de erro, mantém a última tela carregada. Respostas de outra data/modo, de componentes desmontados ou anteriores a uma resposta já aplicada são descartadas. Consultas lentas ainda podem atualizar a tela enquanto uma mais nova estiver pendente.
+
+Para remover TESTE em produção, remover o painel `TestModule` e o invólucro `TestSession` da aplicação. A fonte nativa de `plantaoClock` e `SimProvider` continua sendo o relógio real, sem alterar regras de distribuição.
 
 ## Fluxo operacional
 

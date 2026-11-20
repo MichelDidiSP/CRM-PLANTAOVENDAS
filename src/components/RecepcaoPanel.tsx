@@ -26,9 +26,10 @@ type Props = {
   visits: Visit[];
   queue: QueueEntry[];
   onChanged?: () => Promise<unknown>;
+  inverseQueueName?: 'Inversa' | 'Reversa';
 };
 
-export default function RecepcaoPanel({ brokers, visits, queue, onChanged }: Props) {
+export default function RecepcaoPanel({ brokers, visits, queue, onChanged, inverseQueueName }: Props) {
   const [customerName, setCustomerName] = useState('');
   const [mediaChannel, setMediaChannel] = useState('');
   const [mediaChannelDetail, setMediaChannelDetail] = useState('');
@@ -595,7 +596,7 @@ export default function RecepcaoPanel({ brokers, visits, queue, onChanged }: Pro
       </div>
 
       <div className="lg:col-span-2">
-        <ReceptionActions brokers={brokers} queue={queue} onChanged={onChanged} />
+        <ReceptionActions brokers={brokers} queue={queue} onChanged={onChanged} inverseQueueName={inverseQueueName} />
         <div className="bg-slate-900 rounded-2xl border border-slate-800 p-6 h-full">
           <h2 className="text-lg font-bold mb-4">Visitas recentes</h2>
 

@@ -1,4 +1,4 @@
-import ReturnOfferPanel from './ReturnOfferPanel';
+import ReceptionActions from './ReceptionActions';
 import { attendanceLabel as attendanceTrace } from '@/lib/reception/commissionLabels';
 import { dispatchReceptionEntry } from '@/lib/reception/returnDecisionStore';
 import { actOnPause } from '@/lib/queue/pauseAndPartnersStore';
@@ -120,6 +120,7 @@ export default function FilaPanel({ queue, brokers, allQueue, onChanged }: Props
     if (live.error) throw live.error;
     const fresh = live.queue.find(row => row.id === entry.id);
     if (fresh) await dispatchReceptionEntry(fresh, live.brokers, live.queue, clock, getPlantaoTime().toISOString());
+    await onChanged?.();
   }
 
   async function callParceria(entry: QueueEntry) {
@@ -198,7 +199,7 @@ export default function FilaPanel({ queue, brokers, allQueue, onChanged }: Props
 
   return (
     <div className="space-y-6">
-      <ReturnOfferPanel brokers={brokers} queue={allQueue} onChanged={onChanged} />
+      <ReceptionActions brokers={brokers} queue={allQueue} onChanged={onChanged} inverseQueueName="Reversa" />
       {/* Infinite intercalation info */}
       <div className="bg-slate-900 rounded-2xl border border-slate-800 p-5">
         <div className="flex items-start gap-3">

@@ -1,7 +1,7 @@
 import type { Broker, QueueEntry } from '../supabase';
 import { reverseCoverage } from '../queue/coreDistribution';
-import { onlyOwn } from '../queue/pauseAndPartners';
-import type { ScheduleClock } from '../queue/shiftSchedule';
+import { companyLine, onlyOwn } from '../queue/pauseAndPartners';
+import type { ScheduleClock, ScheduledBroker } from '../queue/shiftSchedule';
 import { isReceptionFree, receptionRoster, resolveReceptionDispatch } from './fallbackOrchestrator';
 
 export type WaitingMode = 'arrival' | 'nominal' | 'coverage';
@@ -37,11 +37,13 @@ export function freeDirectPosition(entry: QueueEntry, brokers: Broker[], queue: 
     !['livre', 'em_mesa'].includes(candidate.attendance_status)) return 0;
   const busy = new Set(queue.filter(e => e.id !== entry.id && ['chamando', 'em_atendimento'].includes(e.queue_status))
     .map(e => e.broker_id));
-  // The candidate is em_mesa only because of THIS pending call. Include him at
-  // his unchanged direct rank, excluding all other busy/paused/absent brokers.
-  return directPosition(candidate, brokers.filter(b => b.presence_status === 'presente' &&
-    b.shift === candidate.shift && !busy.has(b.id) &&
-    (b.id === candidate.id || b.attendance_status === 'livre')));
+  // Read the existing company line without writing ranks or rotation pointers.
+  // Only this pending call's candidate can be em_mesa: his call has reserved
+  // him, but attendance has not started. Other busy brokers never count.
+  const free = companyLine(brokers, candidate).filter(b => b.presence_status === 'presente' &&
+    !(b as ScheduledBroker).leave_after_service && !busy.has(b.id) &&
+    (b.id === candidate.id || b.attendance_status === 'livre'));
+  return free.findIndex(b => b.id === candidate.id) + 1;
 }
 export function canRefuseInverse(entry: ManagedEntry, brokers: Broker[], queue: QueueEntry[] = []): boolean {
   const broker = brokers.find(b => b.id === entry.broker_id);
