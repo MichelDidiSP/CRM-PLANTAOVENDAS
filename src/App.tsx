@@ -20,6 +20,8 @@ import { SimProvider, useSim } from '@/lib/simContext';
 
 import RecepcaoPanel from '@/components/RecepcaoPanel';
 import TestModule from '@/modules/teste/TestModule';
+import TestSession from '@/modules/teste/TestSession';
+import { getPlantaoTime, isVirtualClockActive, plantaoClockParts, publishClock } from '@/lib/plantaoClock';
 import ChamadasPanel from '@/components/ChamadasPanel';
 import CorretorPanel from '@/components/CorretorPanel';
 import FilaPanel from '@/components/ScheduledFilaPanel';
@@ -46,6 +48,13 @@ function AppContent() {
   const maintenanceRunning = useRef(false);
   const scheduleTask = useRef<Promise<void> | null>(null);
   const pollRef = useRef<number | undefined>(undefined);
+  const loadVersion = useRef(0);
+  const appliedLoadVersion = useRef(0);
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => { alive.current = false; appliedLoadVersion.current = ++loadVersion.current; };
+  }, []);
 
   const [loadError, setLoadError] = useState<string | null>(null);
   const [dbConnected, setDbConnected] = useState<boolean | null>(null);
@@ -56,46 +65,52 @@ function AppContent() {
   useEffect(() => { dbReady.then((isReal) => setDbConnected(isReal)); }, []);
 
   const load = useCallback(async () => {
-    const data = await fetchAll();
-    let dayClosed: boolean;
-    try { dayClosed = await isPlantaoClosed(plantaoDate); }
-    catch (error) {
-      setLoadError(error instanceof Error ? error.message : 'Não foi possível consultar o fechamento do plantão.');
-      setLoading(false);
-      return;
-    }
-    setClosedDay(dayClosed ? plantaoDate : null);
-    if (data.error) {
-      setLoadError('Não foi possível conectar ao banco de dados. Verifique a conexão e tente novamente.');
-      setLoading(false);
-      return;
-    }
-    setLoadError(null);
-    setBrokers(data.brokers);
-    setVisits(data.visits);
-    setActiveSession(data.activeSession);
-    const draws = await supabase.from('plantao_sessions').select('*').eq('plantao_date', plantaoDate);
-    if (draws.error) { setLoadError('Não foi possível carregar os sorteios.'); setLoading(false); return; }
-    data.queue = attachReceptionPolicies(data.queue, draws.data ?? []);
+    const request = ++loadVersion.current;
+    const day = plantaoClockParts(getPlantaoTime()).plantaoDate;
+    const virtual = isVirtualClockActive();
+    const current = () => alive.current && request > appliedLoadVersion.current &&
+      day === plantaoClockParts(getPlantaoTime()).plantaoDate && virtual === isVirtualClockActive();
     try {
+      const [data, dayClosed, draws] = await Promise.all([
+        fetchAll(), isPlantaoClosed(day), supabase.from('plantao_sessions').select('*').eq('plantao_date', day),
+      ]);
+      if (!current()) return;
+      if (data.error) throw new Error('Não foi possível conectar ao banco de dados. Verifique a conexão e tente novamente.');
+      if (draws.error) throw new Error('Não foi possível carregar os sorteios.');
+      data.queue = attachReceptionPolicies(data.queue, draws.data ?? []);
       await Promise.all(data.queue.map(entry => synchronizeReceptionTrace(entry, data.brokers)));
+      if (!current()) return;
+      const morning = draws.data?.find((e: { id: string }) => e.id === `schedule_${day}_morning`)?.schedule_data;
+      const afternoon = draws.data?.find((e: { id: string }) => e.id === `schedule_${day}_afternoon`)?.schedule_data;
+      data.activeSession = (draws.data ?? []).filter((s: PlantaoSession) => s.status === 'active')
+        .sort((a: PlantaoSession, b: PlantaoSession) => b.started_at.localeCompare(a.started_at))[0] ?? null;
+      // Publish one coherent successful read. Keep the displayed state during
+      // reloads/errors, and never let an older day or request overwrite it.
+      // A later request still in flight must not starve successful slow reads.
+      appliedLoadVersion.current = request;
+      setLoadError(null); setClosedDay(dayClosed ? day : null);
+      setBrokers(data.brokers); setVisits(data.visits); setQueue(data.queue); setActiveSession(data.activeSession);
+      setMorningDraw(hasDrawParticipants(morning) ? morning : null);
+      setAfternoonDraw(hasDrawParticipants(afternoon) ? afternoon : null);
+      setLoading(false);
+      return dayClosed ? undefined : data;
     } catch (error) {
-      setLoadError(`Não foi possível concluir o registro do atendimento: ${error instanceof Error ? error.message : String(error)}`);
-      setLoading(false); return;
+      if (current()) {
+        appliedLoadVersion.current = request;
+        setLoadError(error instanceof Error ? error.message : 'Não foi possível carregar o plantão.');
+        setLoading(false);
+      }
     }
-    setQueue(data.queue);
-    const morning = draws.data?.find((e: { id: string }) => e.id === `schedule_${plantaoDate}_morning`)?.schedule_data;
-    const afternoon = draws.data?.find((e: { id: string }) => e.id === `schedule_${plantaoDate}_afternoon`)?.schedule_data;
-    setMorningDraw(hasDrawParticipants(morning) ? morning : null);
-    setAfternoonDraw(hasDrawParticipants(afternoon) ? afternoon : null);
-    setLoading(false);
-    return dayClosed ? undefined : data;
   }, [plantaoDate]);
 
   useEffect(() => {
     let mounted = true;
     load();
     pollRef.current = window.setInterval(() => { if (mounted) load(); }, 3000);
+    const resume = () => { if (mounted) { publishClock(); void load(); } };
+    const visible = () => { if (document.visibilityState === 'visible') resume(); };
+    window.addEventListener('focus', resume);
+    document.addEventListener('visibilitychange', visible);
 
     const channel = supabase
       .channel('plantao-realtime')
@@ -107,6 +122,8 @@ function AppContent() {
     return () => {
       mounted = false;
       if (pollRef.current) window.clearInterval(pollRef.current);
+      window.removeEventListener('focus', resume);
+      document.removeEventListener('visibilitychange', visible);
       supabase.removeChannel(channel);
     };
   }, [load]);
@@ -277,7 +294,7 @@ function AppContent() {
         {publishedDraws.afternoon && <PendingShiftQueues draw={publishedDraws.afternoon} brokers={brokers}
           title={schedule.coexistence ? 'Sorteio da tarde — fila da manhã ainda em operação' : 'Sorteio da tarde'} />}
         {view === 'auditoria' && <section className="mb-6 grid md:grid-cols-2 gap-4">{(['manha', 'tarde'] as const).filter(shift => !isExtendedShift || shift === 'manha').map(shift => <div key={shift}><h2 className="font-bold">Inscritos — {shift === 'manha' ? 'Manhã / Integral' : 'Tarde'}</h2><ul>{brokers.filter(b => !b.is_external_partner && (shift === 'manha' ? (morningDraw && [...morningDraw.viva, ...morningDraw.nobre].includes(b.id)) || b.shift === 'manha' && b.arrived_at?.startsWith(plantaoDate) : (b as Broker & { afternoon_enrolled_at?: string }).afternoon_enrolled_at?.startsWith(plantaoDate) || b.shift === 'tarde' && b.arrived_at)).map(b => <li key={b.id}>{b.operational_name} · {b.agency}</li>)}</ul></div>)}</section>}
-        {view === 'recepcao' && !closed && <><ExternalPartnerPanel intakeRedirected={partnerIntakeRedirected} /><RecepcaoPanel brokers={brokers} visits={visits} queue={queue} onChanged={load} /></>}
+        {view === 'recepcao' && !closed && <><ExternalPartnerPanel intakeRedirected={partnerIntakeRedirected} /><RecepcaoPanel brokers={brokers} visits={visits} queue={queue} onChanged={load} inverseQueueName="Reversa" /></>}
         {view === 'chamadas' && !closed && <><ExternalPartnerPanel callsOnly /><ChamadasPanel queue={queue} brokers={brokers} /></>}
         {view === 'corretor' && !closed && <><CorretorPanel brokers={brokers} /><ExternalPartnerPanel managementOnly /></>}
         {view === 'fila' && !closed && <FilaPanel queue={sortedQueue} brokers={brokers} allQueue={queue} onChanged={load} />}
@@ -463,8 +480,8 @@ function AuditoriaPanel({ brokers, queue, isAfternoonActive, isMorningQueueActiv
 
 export default function App() {
   return (
-    <SimProvider>
+    <TestSession><SimProvider>
       <AppContent />
-    </SimProvider>
+    </SimProvider></TestSession>
   );
 }

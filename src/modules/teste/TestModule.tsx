@@ -1,8 +1,8 @@
-import { useLayoutEffect, useState } from 'react';
+import { useState } from 'react';
 import { useSim } from '@/lib/simContext';
 import type { Broker, QueueEntry, Visit } from '@/lib/supabase';
 import { resetTestPlantao } from './resetTestPlantao';
-import { createVirtualClock } from './virtualClock';
+import TestSession, { useTestSession } from './TestSession';
 import QuickEntryPanel from './QuickEntryPanel';
 import TestCustomers from './TestCustomers';
 
@@ -10,14 +10,19 @@ type Props = {
   brokers: Broker[]; visits: Visit[]; queue: QueueEntry[]; closed: boolean; dbConnected: boolean | null;
   onChanged: () => Promise<unknown>; runMaintenance: (work: () => Promise<void>) => Promise<void>;
 };
-export default function TestModule({ brokers, visits, queue, closed, onChanged, runMaintenance }: Props) {
-  const [enabled, setEnabled] = useState(false);
-  const [clock] = useState(createVirtualClock);
+export default function TestModule(props: Props) {
+  const session = useTestSession();
+  // Standalone embedding retains the same API and owns its own test session.
+  return session ? <TestControls {...props} session={session} /> : <TestSession><TestModule {...props} /></TestSession>;
+}
+function TestControls({ brokers, visits, queue, closed, onChanged, runMaintenance, session }: Props & {
+  session: NonNullable<ReturnType<typeof useTestSession>>;
+}) {
+  const { enabled, clock, toggle } = session;
   const [confirmReset, setConfirmReset] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [error, setError] = useState('');
   const { clockDisplay, plantaoDate, testMode } = useSim();
-  useLayoutEffect(() => enabled ? clock.start() : undefined, [enabled, clock]);
   const [resetVersion, setResetVersion] = useState(0);
 
   async function reset() {
@@ -37,7 +42,7 @@ export default function TestModule({ brokers, visits, queue, closed, onChanged, 
   return <div className="py-2">
     <button type="button" aria-expanded={enabled} aria-controls="test-module" disabled={resetting}
       className={`rounded-lg px-4 py-2 text-sm font-bold ${enabled ? 'bg-amber-400 text-slate-950' : 'bg-slate-800 text-amber-300'}`}
-      onClick={() => { setEnabled(value => !value); setConfirmReset(false); }}>TESTE</button>
+      onClick={() => { toggle(); setConfirmReset(false); }}>TESTE</button>
     {enabled && <section id="test-module" aria-label="Módulo TESTE" className="mt-3 space-y-4 rounded-2xl border border-amber-500/30 bg-slate-900 p-4">
       <p className="text-sm text-amber-300">Modo TESTE ativo · relógio virtual · mesma base e motor do plantão.</p>
       <fieldset disabled={resetting} className="flex flex-wrap items-end gap-3">

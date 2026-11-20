@@ -6,8 +6,9 @@ import { firstName } from '@/lib/reception/intake';
 import { canRefuseInverse, type ManagedEntry } from '@/lib/reception/operationalChoices';
 import { changeNominalWaiting, refuseInverseCall } from '@/lib/reception/operationalStore';
 
-export default function ReceptionActions({ brokers, queue, onChanged }: {
+export default function ReceptionActions({ brokers, queue, onChanged, inverseQueueName = 'Inversa' }: {
   brokers: Broker[]; queue: ManagedEntry[]; onChanged?: () => Promise<unknown>;
+  inverseQueueName?: 'Inversa' | 'Reversa';
 }) {
   const { simSeconds, isExtendedShift, plantaoDate, getCurrentTime } = useSim();
   const [running, setRunning] = useState(false);
@@ -38,7 +39,7 @@ export default function ReceptionActions({ brokers, queue, onChanged }: {
         <button type="button" disabled={running} onClick={() => void act(entry, false)} className="mt-2 rounded bg-amber-500 px-3 py-2 text-slate-950 disabled:opacity-50">Mudou de ideia / Atender com outro corretor</button>
       </> : canRefuseInverse(entry, brokers, queue) ? <>
         <p>Chamada para {brokers.find(b => b.id === entry.broker_id)?.operational_name} · posição direta preservada.</p>
-        <button type="button" disabled={running} onClick={() => void act(entry, true)} className="mt-2 rounded bg-amber-500 px-3 py-2 text-slate-950 disabled:opacity-50">Recusar (Ir para o Fim da Fila Inversa)</button>
+        <button type="button" disabled={running} onClick={() => void act(entry, true)} className="mt-2 rounded bg-amber-500 px-3 py-2 text-slate-950 disabled:opacity-50">Recusar (Ir para o Fim da Fila {inverseQueueName})</button>
       </> : <p>{entry.reception_policy?.mode === 'arrival' ? 'Espera prioritária pelo primeiro corretor livre que chegar' : 'Aguardando cobertura: equipe → empresa → outra empresa'}{entry.reception_policy?.ownerId ? ' · Fifty com o corretor original.' : ' · 100% da comissão.'}</p>}
     </div>)}
   </section></>;

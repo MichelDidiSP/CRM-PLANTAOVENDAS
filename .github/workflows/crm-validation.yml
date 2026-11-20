@@ -29,6 +29,8 @@ jobs:
         run: git diff --exit-code cef62a818d82387453224b92d911571b6670895f HEAD -- src/modules/teste/TestCustomers.integration.test.tsx supabase/tests/test_customers_safeupdate.sql supabase/migrations
       - name: Confirmar testes e fixtures da PR 12
         run: git diff --exit-code 5d356b25ca338ba29358a92ecdab6c2c3e2d050b HEAD -- src/modules/teste/receptionChoices.test.ts src/modules/teste/receptionFixtures.ts src/modules/teste/receptionOperations.integration.test.tsx src/modules/teste/receptionOperations.rpc.test.ts supabase/tests/reception_choices.sql
+      - name: Confirmar testes da PR 13 e rotinas de movimentação preservadas
+        run: git diff --exit-code 995c29644ef6fb22e44a6adc6a552dbe67797f8c HEAD -- src/modules/teste/fiftyDecision.test.ts src/modules/teste/fiftyReception.integration.test.tsx src/lib/queueEngine.ts src/lib/reception/operationalStore.ts src/lib/reception/returnDecision.ts src/lib/reception/returnDecisionStore.ts supabase
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
