@@ -10,6 +10,10 @@ type Props = {
   brokers: Broker[]; visits: Visit[]; queue: QueueEntry[]; closed: boolean; dbConnected: boolean | null;
   onChanged: () => Promise<unknown>; runMaintenance: (work: () => Promise<void>) => Promise<void>;
 };
+// Same max-w-7xl / px-4 sm:px-6 alignment, without a short containing box
+// that would release the sticky bar at the end of the TESTE panel.
+const panelWidth = 'mx-auto w-[calc(100%-2rem)] max-w-[78rem] sm:w-[calc(100%-3rem)] sm:max-w-[77rem]';
+
 export default function TestModule({ brokers, visits, queue, closed, onChanged, runMaintenance }: Props) {
   const [enabled, setEnabled] = useState(false);
   const [clock] = useState(createVirtualClock);
@@ -34,12 +38,14 @@ export default function TestModule({ brokers, visits, queue, closed, onChanged, 
     finally { setResetting(false); }
   }
 
-  return <div className="py-2">
+  return <div className="contents">
+    <div className={`${panelWidth} py-2`}>
     <button type="button" aria-expanded={enabled} aria-controls="test-module" disabled={resetting}
       className={`rounded-lg px-4 py-2 text-sm font-bold ${enabled ? 'bg-amber-400 text-slate-950' : 'bg-slate-800 text-amber-300'}`}
       onClick={() => { setEnabled(value => !value); setConfirmReset(false); }}>TESTE</button>
-    {enabled && <section id="test-module" aria-label="Módulo TESTE" className="mt-3 space-y-4 rounded-2xl border border-amber-500/30 bg-slate-900 p-4">
-      <div role="region" aria-label="Controles de tempo do TESTE" className="sticky top-0 z-40 space-y-4 bg-slate-900">
+    </div>
+    {enabled && <section id="test-module" aria-label="Módulo TESTE" className="contents">
+      <div role="region" aria-label="Controles de tempo do TESTE" className={`sticky top-0 z-40 space-y-4 bg-slate-900 ${panelWidth} mt-1 rounded-t-2xl border border-b-0 border-amber-500/30 p-4 pb-0`}>
       <p className="text-sm text-amber-300">Modo TESTE ativo · relógio virtual · mesma base e motor do plantão.</p>
       <fieldset disabled={resetting} className="flex flex-wrap items-end gap-3">
         <label className="text-sm">Relógio virtual
@@ -55,6 +61,7 @@ export default function TestModule({ brokers, visits, queue, closed, onChanged, 
         <button type="button" onClick={() => setConfirmReset(true)} className="rounded bg-red-500/20 px-3 py-2 text-red-300 disabled:opacity-50">Reiniciar Plantão</button>
       </fieldset>
       </div>
+      <div className={`${panelWidth} mb-2 space-y-4 rounded-b-2xl border border-t-0 border-amber-500/30 bg-slate-900 p-4`}>
       {closed && <p className="text-amber-300">Plantão fechado. Reinicie o teste para realizar novas entradas.</p>}
       {error && <p role="alert" className="text-red-300">{error}</p>}
       <QuickEntryPanel key={resetVersion} brokers={brokers} visits={visits} queue={queue} disabled={closed || resetting} onChanged={onChanged} />
@@ -64,6 +71,7 @@ export default function TestModule({ brokers, visits, queue, closed, onChanged, 
         <button type="button" disabled={resetting} onClick={() => void reset()} className="rounded bg-red-600 px-3 py-2">Confirmar reinício</button>
         <button type="button" disabled={resetting} onClick={() => setConfirmReset(false)} className="ml-3 rounded bg-slate-800 px-3 py-2">Cancelar</button>
       </div>}
+      </div>
     </section>}
   </div>;
 }
