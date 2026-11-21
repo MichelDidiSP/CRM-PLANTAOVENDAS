@@ -261,10 +261,8 @@ function AppContent() {
         </div>
       </header>
 
-      <div className="mx-auto w-full max-w-7xl px-4 sm:px-6">
-        <TestModule brokers={brokers} visits={visits} queue={queue} closed={closed} dbConnected={dbConnected}
-          onChanged={load} runMaintenance={runMaintenance} />
-      </div>
+      <TestModule brokers={brokers} visits={visits} queue={queue} closed={closed} dbConnected={dbConnected}
+        onChanged={load} runMaintenance={runMaintenance} />
       <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 py-6">
         {loadError && <p role="alert" className="text-red-400 mb-4">{loadError}</p>}
         {view === 'auditoria' && <ShiftClosingDashboard />}

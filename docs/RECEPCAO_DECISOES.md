@@ -8,6 +8,8 @@ As alterações de sincronização da PR #14 (`fa8fd3f`) foram revertidas. O car
 
 A barra de tempo da PR #15 permanece com `sticky top-0 z-40` e fundo opaco. O cabeçalho principal consulta a fonte de relógio já existente somente para sua classe de posicionamento, evitando sobrepor essa barra; não instala outro provedor ou evento.
 
+O limite da barra foi ampliado para a página inteira: os invólucros do TESTE usam `display: contents`, e o antigo invólucro curto em App foi removido. A barra e o corpo rolável conservam o alinhamento, as cores e os espaçamentos do quadro anterior. A mudança é exclusivamente de estrutura/CSS; não adiciona estado, observadores ou eventos de rolagem/foco. Um novo teste Vitest verifica o contêiner da barra (365 testes no total). A verificação Chromium compara a geometria inicial com a PR #16 e percorre a rolagem completa em Recepção, Motor da Fila e Auditoria, em três larguras de tela.
+
 O botão da Recepção usa o rótulo “Recusar (Ir para o Fim da Fila Reversa)” e a verificação pura já existente na PR #13: considera o 1º ou 2º livre elegível da empresa, na ordem direta atual. O candidato reservado pela própria chamada está em `em_mesa`, ainda sem atendimento; somente ele é considerado nessa condição. A verificação não escreve filas ou ponteiros, e a ação de recusa permanece intacta.
 
 A suíte contém 364 testes: os 357 da PR #13, o teste original da barra fixa e seis testes adicionais de renderização e ciclo do TESTE. Os dez testes da PR #14 foram retirados junto com a funcionalidade revertida. Os testes novos verificam a recusa para o 1º/2º livre, a ausência de mutações durante a renderização e a ausência dos eventos de ciclo de aba removidos.

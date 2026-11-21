@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   validate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -41,6 +41,32 @@ jobs:
       - run: npm test
       - run: npm run typecheck
       - run: npm run build
+      - name: Preparar Chromium para verificar a rolagem real
+        run: |
+          python -m venv "$RUNNER_TEMP/crm-browser"
+          "$RUNNER_TEMP/crm-browser/bin/pip" install playwright==1.51.0
+          "$RUNNER_TEMP/crm-browser/bin/playwright" install --with-deps chromium
+      - name: Verificar barra TESTE até o fim da página e aparência da PR 16
+        env:
+          VITE_SUPABASE_URL: ''
+          VITE_SUPABASE_ANON_KEY: ''
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/crm-before" 18d54568b843c0749e5131bae346bc0b1339191f
+          ln -s "$PWD/node_modules" "$RUNNER_TEMP/crm-before/node_modules"
+          npm run dev -- --host 127.0.0.1 --port 4317 > "$RUNNER_TEMP/crm-current.log" 2>&1 &
+          browser_current_pid=$!
+          npm --prefix "$RUNNER_TEMP/crm-before" run dev -- --host 127.0.0.1 --port 4318 > "$RUNNER_TEMP/crm-before.log" 2>&1 &
+          browser_before_pid=$!
+          trap 'kill "$browser_current_pid" "$browser_before_pid" || true' EXIT
+          curl --retry 20 --retry-connrefused --retry-delay 1 --fail --silent --output /dev/null http://127.0.0.1:4317
+          curl --retry 20 --retry-connrefused --retry-delay 1 --fail --silent --output /dev/null http://127.0.0.1:4318
+          "$RUNNER_TEMP/crm-browser/bin/python" scripts/check_test_time_bar.py http://127.0.0.1:4317 http://127.0.0.1:4318
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: teste-barra-rolagem
+          path: test-results/
+          if-no-files-found: ignore
 
   database:
     runs-on: ubuntu-latest
