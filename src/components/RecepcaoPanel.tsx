@@ -1,4 +1,5 @@
 import { dispatchReceptionEntry } from '@/lib/reception/returnDecisionStore';
+import { scheduledRoute, SCHEDULED_REASON } from '@/lib/reception/scheduledAttendance';
 import { attendanceLabel as attendanceTrace } from '@/lib/reception/commissionLabels';
 import { isVirtualClockActive } from '@/lib/plantaoClock';
 import { lookupReceptionReturn } from '@/lib/reception/returnLookup';
@@ -35,6 +36,9 @@ export default function RecepcaoPanel({ brokers, visits, queue, onChanged, inver
   const [mediaChannelDetail, setMediaChannelDetail] = useState('');
   const [phone, setPhone] = useState('');
   const [noPhone, setNoPhone] = useState(false);
+  const [scheduledTime, setScheduledTime] = useState('');
+  const [designatedBrokerId, setDesignatedBrokerId] = useState('');
+  const scheduledRequested = useRef(false);
   const [returnMatch, setReturnMatch] = useState<Awaited<ReturnType<typeof lookupReceptionReturn>>>(null);
   const submitLock = useRef(false);
   const automaticOwner = useRef<string | null>(null);
@@ -54,7 +58,8 @@ export default function RecepcaoPanel({ brokers, visits, queue, onChanged, inver
     lookupReceptionReturn(noPhone ? '' : phone, testing).then(match => {
       if (!active) return;
       setReturnMatch(match);
-      if (match) { automaticOwner.current = match.ownerId; setReason('Retorno'); setReferredBrokerId(match.ownerId);
+      if (match) { automaticOwner.current = match.ownerId;
+        if (!scheduledRequested.current) { setReason('Retorno'); setReferredBrokerId(match.ownerId); }
         if (nameEditVersion.current === nameVersion) setCustomerName(match.visit.customer_name);
         const owner = brokers.find(b => b.id === match.ownerId);
         setSelectedBroker(owner ?? null); setBrokerSearch(owner?.operational_name ?? '');
@@ -68,7 +73,7 @@ export default function RecepcaoPanel({ brokers, visits, queue, onChanged, inver
   const [message, setMessage] = useState<{ type: 'success' | 'error' | 'warning' | 'info'; text: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [revealed, setRevealed] = useState(false);
-  const { currentShift, simSeconds, getCurrentTime, isHoliday, setIsHoliday, isExtendedShift, plantaoDate } = useSim();
+  const { currentShift, operationSeconds: simSeconds, getCurrentTime, isHoliday, setIsHoliday, isExtendedShift, plantaoDate } = useSim();
 
   // Predictive search state
   const [brokerSearch, setBrokerSearch] = useState('');
@@ -98,6 +103,7 @@ export default function RecepcaoPanel({ brokers, visits, queue, onChanged, inver
   useEffect(() => { setWaitChoice(null); }, [phone, noPhone, reason, referredBrokerId]);
   const isParceria = reason === 'Parceria';
   const isDecorado = reason === 'Visita ao Decorado';
+  const isScheduled = reason === SCHEDULED_REASON;
   const isIndicacaoForm = reason === 'Indicação';
   const isManualEntry = isIndicacaoForm && !selectedBroker && brokerSearch.trim().length >= 2 && searchResults.length === 0;
 
@@ -108,10 +114,12 @@ export default function RecepcaoPanel({ brokers, visits, queue, onChanged, inver
   const busyIds = busyReceptionIds(queue);
   const roster = receptionRoster(brokers, clock);
   const everyoneAbsent = allBrokersAbsent(brokers);
-  const choiceOwner = brokers.find(b => b.id === (returnMatch?.ownerId ?? referredBrokerId));
+  const choiceOwner = isScheduled ? undefined : brokers.find(b => b.id === (returnMatch?.ownerId ?? referredBrokerId));
   const partnershipUsesFallback = receptionDestination(roster, busyIds, null) !== 'normal';
 
   function handleReasonChange(newReason: VisitReason) {
+    scheduledRequested.current = newReason === SCHEDULED_REASON;
+    setScheduledTime(''); setDesignatedBrokerId('');
     setReason(newReason);
     setRevealed(false);
     setMessage(null);
@@ -147,7 +155,7 @@ export default function RecepcaoPanel({ brokers, visits, queue, onChanged, inver
     return window.confirm('O corretor original ainda não chegou. Deseja aguardar exclusivamente por ele? OK para aguardar; Cancelar para seguir a cobertura por equipe, empresa e outra empresa com Fifty.') ? 'nominal' : 'coverage';
   }
 
-  function clearForm() { setCustomerName(''); setMediaChannel(''); setMediaChannelDetail(''); setPhone(''); setNoPhone(false); setReason('Primeira visita'); setReferredBrokerId(''); setSelectedBroker(null); setBrokerSearch(''); setReturnMatch(null); setWaitChoice(null); }
+  function clearForm() { scheduledRequested.current = false; setScheduledTime(''); setDesignatedBrokerId(''); setCustomerName(''); setMediaChannel(''); setMediaChannelDetail(''); setPhone(''); setNoPhone(false); setReason('Primeira visita'); setReferredBrokerId(''); setSelectedBroker(null); setBrokerSearch(''); setReturnMatch(null); setWaitChoice(null); }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -162,11 +170,14 @@ export default function RecepcaoPanel({ brokers, visits, queue, onChanged, inver
       const previous = await lookupReceptionReturn(noPhone ? '' : phone, testing);
       const submittedName = customerName.trim() || previous?.visit.customer_name.trim();
       if (!submittedName) throw new Error('Informe o nome do cliente.');
-      const route = intakeRoute(phone, noPhone, reason, referredBrokerId || null, previous);
+      const route = isScheduled ? scheduledRoute(phone, scheduledTime, designatedBrokerId || null)
+        : intakeRoute(phone, noPhone, reason, referredBrokerId || null, previous);
+      if (isScheduled && designatedBrokerId && !allInternalBrokers.some(b => b.id === designatedBrokerId)) throw new Error('Selecione um corretor designado válido.');
       if (['Indicação', 'Retorno'].includes(route.visit_reason) && !route.referred_broker_id) throw new Error('Selecione o corretor original.');
       let waitingMode: WaitingMode | undefined;
       let destination = receptionDestination(roster, busyIds, route.referred_broker_id);
-      if ((everyoneAbsent || waitChoice !== null) && route.visit_reason !== 'Parceria') {
+      if (isScheduled && designatedBrokerId) destination = 'waiting';
+      if ((everyoneAbsent || waitChoice !== null) && route.visit_reason !== 'Parceria' && !(isScheduled && designatedBrokerId)) {
         if (waitChoice === null) throw new Error('Informe se o cliente deseja aguardar.');
         const decision = absenceDecision(route.referred_broker_id, waitChoice);
         if (decision === 'direct') destination = 'direct';
@@ -179,7 +190,8 @@ export default function RecepcaoPanel({ brokers, visits, queue, onChanged, inver
       const media = mediaChannelFields(mediaChannel, mediaChannelDetail);
       if (destination === 'direct') {
         await saveDirectLead({ ...media, customer_name: submittedName, phone: route.phone,
-          visit_reason: route.visit_reason, created_at: timestamp, shift: currentShift, is_test: testing });
+          visit_reason: route.visit_reason, created_at: timestamp, shift: currentShift, is_test: testing,
+          ...(isScheduled ? { scheduled_time: scheduledTime || null } : {}) });
         setMessage({ type: 'success', text: 'Cliente cadastrado na base da Incorporadora.' });
       } else {
         if (destination === 'normal') {
@@ -200,11 +212,11 @@ export default function RecepcaoPanel({ brokers, visits, queue, onChanged, inver
         if (queued.error || !queued.data) throw new Error(queued.error?.message ?? 'Falha ao criar fila.');
         createdId = null; policyEntryId = null;
         clearForm();
-        if (waitingMode || destination === 'normal' && route.referred_broker_id) {
+        if (waitingMode || destination === 'normal' && route.referred_broker_id || isScheduled && designatedBrokerId) {
           await dispatchReceptionEntry({ ...queued.data, visit: result.data }, brokers, queue, clock, timestamp);
         }
         setMessage({ type: 'success', text: destination === 'waiting'
-          ? waitingMode === 'nominal' ? 'Cliente aguardando exclusivamente o corretor original.' : waitingMode === 'arrival' ? 'Cliente na espera prioritária de chegada.' : 'Cliente cadastrado na Fila de Espera Geral.'
+          ? isScheduled && designatedBrokerId ? 'Atendimento agendado registrado para o corretor designado; o sistema chama quando ele estiver livre.' : waitingMode === 'nominal' ? 'Cliente aguardando exclusivamente o corretor original.' : waitingMode === 'arrival' ? 'Cliente na espera prioritária de chegada.' : 'Cliente cadastrado na Fila de Espera Geral.'
           : `${firstName(submittedName)} entrou na fila como ${route.visit_reason}.` });
       }
       clearForm();
@@ -279,7 +291,7 @@ export default function RecepcaoPanel({ brokers, visits, queue, onChanged, inver
                 <input
                   type="tel"
                   value={phone}
-                  onChange={(e) => { setPhone(maskPhone(e.target.value)); setReason('Primeira visita'); setReferredBrokerId(''); setSelectedBroker(null); setBrokerSearch(''); }}
+                  onChange={(e) => { scheduledRequested.current = false; setPhone(maskPhone(e.target.value)); setReason('Primeira visita'); setReferredBrokerId(''); setSelectedBroker(null); setBrokerSearch(''); }}
                   disabled={noPhone}
                   placeholder="(XX) XXXXX-XXXX"
                   className={`w-full bg-slate-800 border rounded-xl pl-10 pr-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 transition ${
@@ -291,7 +303,8 @@ export default function RecepcaoPanel({ brokers, visits, queue, onChanged, inver
               </div>
               <label className="flex gap-2 mt-2 text-sm"><input type="checkbox" checked={noPhone} onChange={e => { setNoPhone(e.target.checked); setPhone(''); setReason('Visita ao Decorado'); setReferredBrokerId(''); }} />Cliente não forneceu telefone</label>
               {(!normalizePhone(phone) || noPhone) && <p className="text-sm text-amber-300">Sem telefone: atendimento obrigatório pela Fila Inversa (Visita ao Decorado).</p>}
-              {returnMatch && <p className="text-sm text-emerald-300">Retorno identificado. Corretor original: {brokers.find(b => b.id === returnMatch.ownerId)?.operational_name ?? 'vinculado ao cadastro anterior'}.</p>}
+              {returnMatch && !isScheduled && <><p className="text-sm text-emerald-300">Retorno identificado. Corretor original: {brokers.find(b => b.id === returnMatch.ownerId)?.operational_name ?? 'vinculado ao cadastro anterior'}.</p>
+                <button type="button" onClick={() => handleReasonChange(SCHEDULED_REASON)} className="mt-2 text-sm text-sky-300 underline">Registrar como Atendimento Agendado</button></>}
 
             </div>
 
@@ -300,15 +313,29 @@ export default function RecepcaoPanel({ brokers, visits, queue, onChanged, inver
               <select
                 aria-label="Motivo da visita"
                 value={noPhone || !normalizePhone(phone) ? 'Visita ao Decorado' : reason}
-                disabled={noPhone || !normalizePhone(phone) || !!returnMatch}
+                disabled={noPhone || !normalizePhone(phone) || !!returnMatch && !isScheduled}
                 onChange={(e) => handleReasonChange(e.target.value as VisitReason)}
                 className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-amber-500 transition"
               >
-                {REASONS.filter(r => r !== 'Parceria' || partnershipUsesFallback || reason === 'Parceria').map((r) => (
+                {[...REASONS, SCHEDULED_REASON].filter(r => r !== 'Parceria' || partnershipUsesFallback || reason === 'Parceria').map((r) => (
                   <option key={r} value={r}>{r}</option>
                 ))}
               </select>
             </div>
+
+            {isScheduled && <fieldset className="space-y-3 rounded-xl border border-sky-500/30 p-4">
+              <legend className="px-2 text-sm">Atendimento Agendado</legend>
+              <label className="block text-sm">Horário Agendado (opcional)
+                <input aria-label="Horário Agendado" type="time" value={scheduledTime} onChange={e => setScheduledTime(e.target.value)} className="ml-3 rounded bg-slate-800 px-3 py-2" />
+              </label>
+              <label className="block text-sm">Corretor Designado (opcional)
+                <select aria-label="Corretor Designado" value={designatedBrokerId} onChange={e => setDesignatedBrokerId(e.target.value)} className="mt-2 w-full rounded bg-slate-800 px-3 py-2">
+                  <option value="">Próximo da fila direta</option>
+                  {allInternalBrokers.map(b => <option key={b.id} value={b.id}>{b.operational_name} · {b.agency}</option>)}
+                </select>
+              </label>
+              <p className="text-xs text-slate-400">Consome a vez como Primeira Visita. Se houver corretor designado, o cliente aguarda até ele estar presente e livre.</p>
+            </fieldset>}
 
             {isParceria && partnershipUsesFallback && (
               <p className="text-sm text-sky-300">Cadastre aqui os dados completos da visita de parceria.</p>
@@ -550,7 +577,7 @@ export default function RecepcaoPanel({ brokers, visits, queue, onChanged, inver
               </div>
             )}
 
-            {everyoneAbsent && !isParceria && !lookupPending && <fieldset className="rounded-xl border border-amber-500/30 p-4 space-y-2">
+            {everyoneAbsent && !isParceria && !lookupPending && !(isScheduled && designatedBrokerId) && <fieldset className="rounded-xl border border-amber-500/30 p-4 space-y-2">
               <legend className="px-2 text-sm font-medium">{choiceOwner
                 ? `Deseja aguardar o corretor original (${choiceOwner.operational_name})?`
                 : 'Deseja aguardar o primeiro corretor chegar?'}</legend>

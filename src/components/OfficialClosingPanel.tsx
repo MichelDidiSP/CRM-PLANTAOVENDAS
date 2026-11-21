@@ -1,12 +1,14 @@
 import { useState } from 'react';
 import { closePlantao, closingShareLinks, closingText, type ClosingSummary } from '@/lib/reports/officialClosing';
 
-export default function OfficialClosingPanel({ date, closed, onClosed }: {
+export default function OfficialClosingPanel({ date, closed, onClosed, automaticSummary }: {
   date: string;
   closed: boolean;
   onClosed: () => void;
+  automaticSummary?: ClosingSummary | null;
 }) {
-  const [summary, setSummary] = useState<ClosingSummary | null>(null);
+  const [manualSummary, setSummary] = useState<ClosingSummary | null>(null);
+  const summary = automaticSummary?.date === date ? automaticSummary : manualSummary;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 

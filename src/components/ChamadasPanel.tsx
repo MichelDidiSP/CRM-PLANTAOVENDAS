@@ -8,6 +8,7 @@ import { Volume2, VolumeX, Timer, Users, Building2, Zap, Chrome as Home, ArrowLe
 import { supabase, type Broker, type QueueEntry, type Agency } from '@/lib/supabase';
 import { fetchAll, formatTime, nextBrokerFromAgency, markBrokerInService, markStandardBrokerInService } from '@/lib/queueEngine';
 import { useSim } from '@/lib/simContext';
+import { dispatchClock } from '@/lib/operations/dayExtension';
 
 type Props = {
   queue: QueueEntry[];
@@ -15,7 +16,7 @@ type Props = {
 };
 
 export default function ChamadasPanel({ queue, brokers }: Props) {
-  const { callDuration, testMode, simSeconds, plantaoDate, isExtendedShift, currentShift } = useSim();
+  const { callDuration, testMode, operationSeconds: simSeconds, plantaoDate, isExtendedShift, currentShift } = useSim();
   const [currentCall, setCurrentCall] = useState<QueueEntry | null>(null);
   const [attempts, setAttempts] = useState(0);
   const [soundEnabled, setSoundEnabled] = useState(true);
@@ -106,7 +107,7 @@ export default function ChamadasPanel({ queue, brokers }: Props) {
       const entry = refreshedQueue as QueueEntry;
       const reason = entry.visit?.visit_reason;
       if (entry.reception_waiting || entry.queue_type === 'decorado' || reason?.startsWith('Indicação') || reason === 'Retorno') {
-        const clock = { seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate };
+        const clock = dispatchClock({ seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate });
         try {
           const live = await fetchAll();
           if (live.error) throw live.error;

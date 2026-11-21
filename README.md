@@ -2,6 +2,8 @@
 
 [![Open in Bolt](https://bolt.new/static/open-in-bolt.svg)](https://bolt.new/~/sb1-rnlzbfyx)
 
+Consulte a [operação final do plantão](docs/OPERACAO_FINAL_PLANTAO.md) para a configuração atual de fechamento às 21h, extensão Caixa, Atendimento Agendado e indicadores datados. As instruções abaixo registram a implantação inicial.
+
 ## Recepção e fechamento oficial
 
 Aplique a migração `20261116230000_reception_fallback_and_official_closing.sql` no projeto Supabase do CRM. Ela cria a base privativa da Incorporadora, a fila de espera e o fechamento diário. Cadastre no Supabase Auth as contas dos operadores autorizados e vincule seus UUIDs em `crm_private.closing_operators`. Os papéis aceitos são `recepcao`, `gerencia` e `diretoria`. Cadastre os contatos da Gerência e da Diretoria em `crm_private.closing_recipients`, via SQL administrativo:

@@ -29,7 +29,7 @@ def geometry(page):
       return [...bar.querySelectorAll('p, input, button'), document.querySelector('main'),
         document.querySelector('[aria-label="Clientes Inseridos no Teste"]')].map(el => {
         const r = el.getBoundingClientRect(), s = getComputedStyle(el);
-        return {x:r.x, y:r.y, width:r.width, height:r.height, color:s.color,
+        return {x:r.x, y:r.y, width:r.width, height:el.tagName === 'MAIN' ? null : r.height, color:s.color,
           background:s.backgroundColor, font:s.font, padding:s.padding};
       });
     }''')

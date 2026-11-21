@@ -13,7 +13,7 @@ type QuickReason = VisitReason;
 export default function QuickEntryPanel({ brokers, visits, queue, disabled, onChanged }: {
   brokers: Broker[]; visits: Visit[]; queue: QueueEntry[]; disabled: boolean; onChanged: () => Promise<unknown>;
 }) {
-  const { currentShift, simSeconds, getCurrentTime, isExtendedShift, plantaoDate } = useSim();
+  const { currentShift, operationSeconds: simSeconds, getCurrentTime, isExtendedShift, plantaoDate } = useSim();
   const [apenasImobiliariaAgency, setApenasImobiliariaAgency] = useState<Agency>('Viva Imóveis');
   const [message, setMessage] = useState<{ type: string; text: string } | null>(null);
   // Quick entry state

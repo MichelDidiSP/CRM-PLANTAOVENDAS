@@ -11,7 +11,7 @@ import { useSim } from '@/lib/simContext';
 type Props = { brokers: Broker[] };
 
 export default function CorretorPanel({ brokers }: Props) {
-  const { getCurrentTime, clockDisplay, currentShift, isCheckinOpen, isPreSorteio, simSeconds, isExtendedShift, plantaoDate } = useSim();
+  const { getCurrentTime, clockDisplay, currentShift, isCheckinOpen, isPreSorteio, operationSeconds: simSeconds, isExtendedShift, plantaoDate } = useSim();
   const clock = { seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate };
   const schedule = scheduleAt(clock);
   const [showAdd, setShowAdd] = useState(false);

@@ -2,6 +2,10 @@ import { attachReceptionPolicies, synchronizeReceptionTrace } from '@/lib/recept
 import ReceptionAuditPanel from '@/components/ReceptionAuditPanel';
 import ShiftClosingDashboard from '@/components/ShiftClosingDashboard';
 import OfficialClosingPanel from '@/components/OfficialClosingPanel';
+import DayExtensionControl from '@/components/DayExtensionControl';
+import { closeAt21, loadDayExtension } from '@/lib/operations/dayStore';
+import { synchronizeMeritIndicators } from '@/lib/operations/meritIndicators';
+import type { ClosingSummary } from '@/lib/reports/officialClosing';
 import { isPlantaoClosed } from '@/lib/reports/officialClosing';
 import { busyReceptionIds, receptionDestination, receptionRoster, visibleDraws } from '@/lib/reception/fallbackOrchestrator';
 import { dispatchGeneralWaiting } from '@/lib/reception/fallbackStore';
@@ -28,11 +32,12 @@ import FilaPanel from '@/components/ScheduledFilaPanel';
 type View = 'recepcao' | 'chamadas' | 'corretor' | 'fila' | 'auditoria';
 
 function AppContent() {
-  const { clockDisplay, testMode, sorteioTriggered, simSeconds, currentShift, isWeekday, plantaoDate, isPreSorteio, isCheckinOpen, isAtendimentoActive, isShiftTransition, isAfternoonActive, isMorningQueueActive, isExtendedShift, getCurrentTime } = useSim();
+  const { simSeconds: activeSeconds, clockDisplay, testMode, sorteioTriggered, operationSeconds: simSeconds, currentShift, isWeekday, plantaoDate, isPreSorteio, isCheckinOpen, isAtendimentoActive, isShiftTransition, isAfternoonActive, isMorningQueueActive, isExtendedShift, getCurrentTime } = useSim();
   const schedule = scheduleAt({ seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate });
   const [morningDraw, setMorningDraw] = useState<ShiftDraw | null>(null);
   const [afternoonDraw, setAfternoonDraw] = useState<ShiftDraw | null>(null);
   const [closedDay, setClosedDay] = useState<string | null>(null);
+  const [automaticSummary, setAutomaticSummary] = useState<ClosingSummary | null>(null);
   const closed = closedDay === plantaoDate;
   const publishedDraws = visibleDraws(simSeconds, isExtendedShift, morningDraw, afternoonDraw);
   const scheduleRunning = useRef(false);
@@ -59,13 +64,14 @@ function AppContent() {
   const load = useCallback(async () => {
     const data = await fetchAll();
     let dayClosed: boolean;
-    try { dayClosed = await isPlantaoClosed(plantaoDate); }
+    try { dayClosed = await isPlantaoClosed(plantaoDate); await loadDayExtension(plantaoDate); }
     catch (error) {
       setLoadError(error instanceof Error ? error.message : 'Não foi possível consultar o fechamento do plantão.');
       setLoading(false);
       return;
     }
     setClosedDay(dayClosed ? plantaoDate : null);
+    if (!dayClosed) setAutomaticSummary(null);
     if (data.error) {
       setLoadError('Não foi possível conectar ao banco de dados. Verifique a conexão e tente novamente.');
       setLoading(false);
@@ -80,6 +86,7 @@ function AppContent() {
     data.queue = attachReceptionPolicies(data.queue, draws.data ?? []);
     try {
       await Promise.all(data.queue.map(entry => synchronizeReceptionTrace(entry, data.brokers)));
+      await synchronizeMeritIndicators(data.queue);
     } catch (error) {
       setLoadError(`Não foi possível concluir o registro do atendimento: ${error instanceof Error ? error.message : String(error)}`);
       setLoading(false); return;
@@ -117,6 +124,10 @@ function AppContent() {
     const clock = { seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate };
     const at = new Date(`${plantaoDate}T${clockDisplay}-03:00`).toISOString();
     pendingSchedule.current = async () => {
+      if (activeSeconds >= 21 * 3600) {
+        const summary = await closeAt21(plantaoDate, closed);
+        if (summary) { setAutomaticSummary(summary); setClosedDay(plantaoDate); await load(); return; }
+      }
       await advanceSchedule(clock, { deferClosing: true });
       await enforcePauses({ at, shift: currentShift });
       const live = await load();
@@ -134,7 +145,7 @@ function AppContent() {
         catch (error) { setLoadError(`Erro na agenda do plantão: ${error instanceof Error ? error.message : String(error)}`); }
       }
     })().finally(() => { scheduleRunning.current = false; });
-  }, [simSeconds, clockDisplay, isExtendedShift, plantaoDate, loading, closed, load, currentShift, enrollmentVersion, maintenanceVersion]);
+  }, [activeSeconds, simSeconds, clockDisplay, isExtendedShift, plantaoDate, loading, closed, load, currentShift, enrollmentVersion, maintenanceVersion]);
 
   useEffect(() => () => { pendingSchedule.current = null; }, []);
 
@@ -268,8 +279,9 @@ function AppContent() {
         {view === 'auditoria' && <ShiftClosingDashboard />}
         {view === 'auditoria' && <PauseAuditPanel brokers={brokers} />}
         {view === 'auditoria' && <ReceptionAuditPanel brokers={brokers} queue={queue} />}
-        {(view === 'recepcao' || view === 'corretor') && <OfficialClosingPanel key={`${plantaoDate}-${maintenanceVersion}`}
-          date={plantaoDate} closed={closed} onClosed={() => setClosedDay(plantaoDate)} />}
+        {(view === 'recepcao' || view === 'corretor' || view === 'auditoria') && <DayExtensionControl date={plantaoDate} closed={closed} onChanged={load} />}
+        {(view === 'recepcao' || view === 'corretor' || closed && automaticSummary?.date === plantaoDate) && <OfficialClosingPanel key={`${plantaoDate}-${maintenanceVersion}`}
+          date={plantaoDate} closed={closed} automaticSummary={closed ? automaticSummary : null} onClosed={() => setClosedDay(plantaoDate)} />}
         {closed && <p role="status" className="mb-4 text-amber-300">Plantão encerrado para esta data.</p>}
         {publishedDraws.morning && <PendingShiftQueues draw={publishedDraws.morning} brokers={brokers}
           title={schedule.preOpening ? 'Sorteio da manhã — ordem de chegada até 08:59:59' : 'Sorteio da manhã'} />}

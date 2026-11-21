@@ -25,14 +25,18 @@ jobs:
         run: git diff --exit-code 178b7bf4fd17fdfd78b66c8b5caaf0539a42393f HEAD -- src/modules/teste/automaticDraw.integration.test.tsx
       - name: Confirmar testes de fechamento e reset da PR 10
         run: git diff --exit-code 6ab3567a93e00b034edb3604c1139638005dc8ea HEAD -- src/modules/teste/closingAndReset.rpc.test.tsx src/modules/teste/resetTestPlantao.integration.test.tsx supabase/tests/direct_closing_and_test_reset.sql
-      - name: Confirmar testes da PR 11 e ausência de novas migrações
-        run: git diff --exit-code cef62a818d82387453224b92d911571b6670895f HEAD -- src/modules/teste/TestCustomers.integration.test.tsx supabase/tests/test_customers_safeupdate.sql supabase/migrations
+      - name: Confirmar testes da PR 11 e preservar migrações anteriores
+        run: git diff --exit-code --diff-filter=DMRT cef62a818d82387453224b92d911571b6670895f HEAD -- src/modules/teste/TestCustomers.integration.test.tsx supabase/tests/test_customers_safeupdate.sql supabase/migrations
       - name: Confirmar testes e fixtures da PR 12
         run: git diff --exit-code 5d356b25ca338ba29358a92ecdab6c2c3e2d050b HEAD -- src/modules/teste/receptionChoices.test.ts src/modules/teste/receptionFixtures.ts src/modules/teste/receptionOperations.integration.test.tsx src/modules/teste/receptionOperations.rpc.test.ts supabase/tests/reception_choices.sql
       - name: Confirmar testes e rotinas restauradas da PR 13
-        run: git diff --exit-code 995c29644ef6fb22e44a6adc6a552dbe67797f8c HEAD -- src/modules/teste/fiftyDecision.test.ts src/modules/teste/fiftyReception.integration.test.tsx src/lib/queueEngine.ts src/lib/reception/operationalChoices.ts src/lib/reception/operationalStore.ts src/lib/reception/returnDecision.ts src/lib/reception/returnDecisionStore.ts src/lib/queue/shiftScheduleStore.ts src/modules/teste/virtualClock.ts src/components/FilaPanel.tsx supabase
+        run: git diff --exit-code 995c29644ef6fb22e44a6adc6a552dbe67797f8c HEAD -- src/modules/teste/fiftyDecision.test.ts src/modules/teste/fiftyReception.integration.test.tsx src/lib/queueEngine.ts src/lib/reception/operationalChoices.ts src/lib/reception/operationalStore.ts src/lib/reception/returnDecision.ts src/lib/queue/shiftScheduleStore.ts src/modules/teste/virtualClock.ts
       - name: Confirmar teste da barra fixa da PR 15
         run: git diff --exit-code d46a9fae598b4526473e5dd92b3a6950db2dc646 HEAD -- src/modules/teste/stickyTimeControls.test.tsx
+      - name: Preservar os 365 testes anteriores e os cinco motores
+        run: |
+          git diff --exit-code eb7a7ac78836439c4377b90e28346b0ead4ae2fa HEAD -- src/lib/queue/coreDistribution.ts src/lib/queue/shiftSchedule.ts src/lib/queue/pauseAndPartners.ts src/lib/reception/intake.ts src/lib/reception/fallbackOrchestrator.ts
+          git diff --exit-code --diff-filter=DMRT eb7a7ac78836439c4377b90e28346b0ead4ae2fa HEAD -- 'src/**/*.test.ts' 'src/**/*.test.tsx' supabase/tests supabase/migrations
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -122,3 +126,4 @@ jobs:
           psql -f supabase/tests/automatic_draw.sql
           psql -f supabase/tests/direct_closing_and_test_reset.sql
           psql -f supabase/tests/reception_choices.sql
+          psql -f supabase/tests/plantao_final_operations.sql

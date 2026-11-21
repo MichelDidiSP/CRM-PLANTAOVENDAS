@@ -16,7 +16,7 @@ export function mediaChannelFields(channel: string, detail = '') {
   if (!(MEDIA_CHANNELS as readonly string[]).includes(channel)) throw new Error('Selecione um canal de mídia válido.');
   return { media_channel: channel, media_channel_detail: channel === 'Outros' ? detail.trim() || null : null };
 }
-export const ATTENDANCE_TYPES = ['Primeira Visita', 'Indicação', 'Retorno', 'Visita ao Decorado', 'Parceria Externa'] as const;
+export const ATTENDANCE_TYPES = ['Primeira Visita', 'Indicação', 'Retorno', 'Visita ao Decorado', 'Parceria Externa', 'Atendimento Agendado'] as const;
 export const CHART_COLORS = ['#0055FF', '#008844', '#EEAA00', '#FF6600', '#6600CC'] as const;
 export type AttendanceType = typeof ATTENDANCE_TYPES[number];
 export const REPORT_PERIODS = { shift: 'Turno Atual', day: 'Hoje', week: 'Últimos 7 dias', fortnight: 'Últimos 15 dias', thirtyDays: 'Últimos 30 dias', month: 'Acumulado do Mês Atual', previousMonth: 'Mês Anterior', custom: 'Período Personalizado' } as const;
@@ -48,6 +48,7 @@ export function attendanceType(reason?: string | null, queueType?: string | null
   if (queueType === 'decorado' || reason === 'Decorado' || reason === 'Visita ao Decorado') return 'Visita ao Decorado';
   if (reason?.startsWith('Indicação')) return 'Indicação';
   if (reason === 'Retorno') return 'Retorno';
+  if (reason === 'Atendimento Agendado') return 'Atendimento Agendado';
   return 'Primeira Visita';
 }
 export function businessDate(timestamp: string): string {
@@ -111,7 +112,8 @@ export function shiftClosingReport(rows: ReportRow[], filter: ReportFilter) {
   const groups = (map: Map<string, GroupRow>) => [...map.values()].sort((a,b) => b.count-a.count || a.label.localeCompare(b.label, 'pt-BR'));
   return { filter: { ...filter }, ...bounds, total, referralsAndReturns: types['Indicação'] + types['Retorno'],
     companies: groups(companies), teams: groups(teams),
-    types: ATTENDANCE_TYPES.map(label => ({ label, count: types[label] })),
+    // Historical summaries retain their original dimensions until an appointment exists.
+    types: ATTENDANCE_TYPES.filter(label => label !== 'Atendimento Agendado' || types[label] > 0).map(label => ({ label, count: types[label] })),
     media: [...media].map(([label,count]) => ({ label,count })).sort((a,b) => b.count-a.count || a.label.localeCompare(b.label,'pt-BR')),
     daily: [...daily].map(([date,count]) => ({date,count})) };
 }

@@ -8,7 +8,7 @@ export default function ScheduledFilaPanel(props: {
   allQueue: QueueEntry[];
   onChanged?: () => Promise<unknown>;
 }) {
-  const { simSeconds, isExtendedShift, plantaoDate } = useSim();
+  const { operationSeconds: simSeconds, isExtendedShift, plantaoDate } = useSim();
   const clock = {
     seconds: simSeconds,
     singleShift: isExtendedShift,
