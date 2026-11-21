@@ -5,6 +5,7 @@ import { originalBrokerId, operationalDispatch, type ReceptionPolicy, type Retur
 import { busyReceptionIds, isReceptionFree, receptionRoster } from './fallbackOrchestrator';
 import { claimOperationalChoice, createReceptionPolicy, dispatchOperationalEntry, newReceptionPolicy, readReceptionPolicy } from './operationalStore';
 import { availabilityKey, returnDecision, waitingReturn } from './returnDecision';
+import { dispatchDesignatedAppointment, SCHEDULED_REASON } from './scheduledAttendance';
 
 function check(error: { message: string } | null) { if (error) throw new Error(error.message); }
 async function save(policy: ReceptionPolicy, exists: boolean, clock: ScheduleClock, at: string) {
@@ -40,6 +41,8 @@ async function freshWaiting(id: string) {
 
 /** Automatic UI gateway. A true result means a call OR a persisted decision changed. */
 export async function dispatchReceptionEntry(entry: QueueEntry, brokers: Broker[], queue: QueueEntry[], clock: ScheduleClock, at: string) {
+  if (entry.visit?.visit_reason === SCHEDULED_REASON && entry.visit.designated_broker_id)
+    return dispatchDesignatedAppointment(entry, brokers, queue, clock, at);
   if (!waitingReturn(entry)) return dispatchOperationalEntry(entry, brokers, queue, clock, at);
   const existing = await readReceptionPolicy(entry.id);
   const policy = existing ?? policyFor(entry);

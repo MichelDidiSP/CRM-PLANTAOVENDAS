@@ -121,7 +121,7 @@ function Donut({title,rows}:{title:string;rows:Breakdown[]}) {
   </figure>;
 }
 function TeamColumns({rows}:{rows:GroupRow[]}) {
-  const types=ATTENDANCE_TYPES.slice(0,4);
+  const types=ATTENDANCE_TYPES.filter(type => type !== 'Parceria Externa');
   const internal=rows.filter(r=>types.some(t=>r.types[t]>0));
   const max=Math.max(1,...internal.map(r=>types.reduce((sum,t)=>sum+r.types[t],0)));
   return <figure className="border border-slate-300 rounded-xl p-4"><figcaption className="font-bold mb-3">Comparativo de Equipes por Tipo de Atendimento</figcaption>

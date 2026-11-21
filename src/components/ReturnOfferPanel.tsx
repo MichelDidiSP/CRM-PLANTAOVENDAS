@@ -9,7 +9,7 @@ import { fetchAll } from '@/lib/queueEngine';
 export default function ReturnOfferPanel({ brokers, queue, onChanged }: {
   brokers: Broker[]; queue: ManagedEntry[]; onChanged?: () => Promise<unknown>;
 }) {
-  const { simSeconds, isExtendedShift, plantaoDate, getCurrentTime } = useSim();
+  const { operationSeconds: simSeconds, isExtendedShift, plantaoDate, getCurrentTime } = useSim();
   const lock = useRef(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');

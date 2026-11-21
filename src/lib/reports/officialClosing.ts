@@ -43,7 +43,7 @@ export async function isPlantaoClosed(date: string) {
   return Boolean(result.data);
 }
 
-export async function closePlantao(date: string): Promise<ClosingSummary> {
+export async function closePlantao(date: string, operationId = 'operacao_stand'): Promise<ClosingSummary> {
   await dbReady;
   if (typeof supabase.rpc === 'function') {
     const { data, error } = await supabase.rpc('close_plantao_operation', { day: date, at_time: getPlantaoTime().toISOString() });
@@ -73,9 +73,11 @@ export async function closePlantao(date: string): Promise<ClosingSummary> {
         name: entry.visit.customer_name, phone: entry.visit.phone, media: entry.visit.media_channel,
         type: entry.visit.visit_reason, broker: entry.attending_broker_name ?? entry.broker?.operational_name,
         broker_id: entry.broker_id, commission_split: Boolean(entry.commission_split),
+        ...(entry.visit.visit_reason === 'Atendimento Agendado' ? { scheduled_time: entry.visit.scheduled_time ?? null, designated_broker_id: entry.visit.designated_broker_id ?? null } : {}),
       }] : []),
     ...(direct.data ?? []).filter(row => businessDate(row.created_at) === date).map(row => ({
       name: row.customer_name, phone: row.phone, media: row.media_channel, type: row.visit_reason, broker: null,
+      ...(row.visit_reason === 'Atendimento Agendado' ? { scheduled_time: row.scheduled_time ?? null, designated_broker_id: null } : {}),
     })),
     ...(partners.data ?? []).filter(row => businessDate(row.created_at) === date).map(row => {
       const reservation = (reservations.data ?? []).find(item => item.intake_id === row.id);
@@ -85,7 +87,7 @@ export async function closePlantao(date: string): Promise<ClosingSummary> {
     }),
   ];
   const summary: ClosingSummary = { date, closed_at: getPlantaoTime().toISOString(), rows: facts, recipients: [] };
-  const result = await supabase.from('plantao_daily_closures').insert({ ...summary, closed_by: 'operacao_stand', customers });
+  const result = await supabase.from('plantao_daily_closures').insert({ ...summary, closed_by: operationId, customers });
   if (result.error) throw new Error(result.error.message);
   await supabase.from('plantao_sessions').update({ status: 'ended', ended_at: summary.closed_at })
     .eq('plantao_date', date).eq('status', 'active');

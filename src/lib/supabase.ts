@@ -48,7 +48,7 @@ export const dbReady = probeReal().then((ok) => {
 });
 
 export type Agency = 'Viva Imóveis' | 'Casa Nobre' | 'Externo';
-export type VisitReason = 'Primeira visita' | 'Retorno' | 'Indicação' | 'Parceria' | 'Visita ao Decorado' | 'Indicação Presente' | 'Indicação Ausente' | 'Indicação Imobiliária';
+export type VisitReason = 'Primeira visita' | 'Retorno' | 'Indicação' | 'Parceria' | 'Visita ao Decorado' | 'Indicação Presente' | 'Indicação Ausente' | 'Indicação Imobiliária' | 'Atendimento Agendado';
 export type BrokerPresence = 'ausente' | 'presente' | 'pausa';
 export type AttendanceStatus = 'livre' | 'em_mesa' | 'decorado' | 'encerrado' | 'parceiro' | 'apenas_indicacao' | 'em_atendimento';
 export type QueueType = 'geral' | 'decorado' | 'parceria';
@@ -79,6 +79,8 @@ export type Visit = {
   customer_name: string;
   phone: string | null;
   visit_reason: VisitReason;
+  scheduled_time?: string | null;
+  designated_broker_id?: string | null;
   is_test?: boolean;
   referred_broker_id: string | null;
   status: 'aguardando' | 'aguardando_chamada' | 'em_atendimento' | 'encerrado' | 'recusado';

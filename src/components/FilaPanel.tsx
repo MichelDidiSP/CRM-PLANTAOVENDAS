@@ -7,7 +7,8 @@ import { getPlantaoTime, afterPlantaoDelay } from '@/lib/plantaoClock';
 import { firstName } from '@/lib/reception/intake';
 import { Bell, CircleCheck as CheckCircle2, Eye, ArrowLeftRight, Clock, TriangleAlert as AlertTriangle, UserCheck, History, Chrome as Home, Repeat, Sun, Moon } from 'lucide-react';
 import { supabase, type Broker, type QueueEntry, type Agency } from '@/lib/supabase';
-import { fetchAll, markMeritReturns, concludeAttendance, isLateForSort, interleaveQueue, reverseInterleaveQueue, nextBrokerFromInverseQueue, nextBrokerForGeneralQueue, nextBrokerByArrival, nextBrokerFromInverseTop, moveBrokerToEndOfDirectQueue, moveBrokerToEndOfInverseQueue, dispatchBroker, isArrivalOrderMode, nextBrokerByArrivalAnyAgency, nextBrokerByArrivalInverse, ATENDIMENTO_MANHA_START, markBrokerInService, markStandardBrokerInService } from '@/lib/queueEngine';
+import { fetchAll, markMeritReturns, isLateForSort, interleaveQueue, reverseInterleaveQueue, nextBrokerFromInverseQueue, nextBrokerForGeneralQueue, nextBrokerByArrival, nextBrokerFromInverseTop, moveBrokerToEndOfDirectQueue, moveBrokerToEndOfInverseQueue, dispatchBroker, isArrivalOrderMode, nextBrokerByArrivalAnyAgency, nextBrokerByArrivalInverse, ATENDIMENTO_MANHA_START, markBrokerInService, markStandardBrokerInService } from '@/lib/queueEngine';
+import { concludePlantaoAttendance as concludeAttendance, SCHEDULED_REASON } from '@/lib/reception/scheduledAttendance';
 import { resolveReceptionDispatch } from '@/lib/reception/fallbackOrchestrator';
 import { claimReceptionCall } from '@/lib/reception/fallbackStore';
 import { useSim } from '@/lib/simContext';
@@ -20,7 +21,7 @@ type Props = {
 };
 
 export default function FilaPanel({ queue, brokers, allQueue, onChanged }: Props) {
-  const { isPreSorteio, currentShift, simSeconds, isExtendedShift, plantaoDate } = useSim();
+  const { isPreSorteio, currentShift, operationSeconds: simSeconds, isExtendedShift, plantaoDate } = useSim();
   const recallCancel = useRef<(() => void) | undefined>();
   useEffect(() => () => recallCancel.current?.(), []);
   const waiting = queue.filter((e) => e.queue_status === 'aguardando');
@@ -90,9 +91,9 @@ export default function FilaPanel({ queue, brokers, allQueue, onChanged }: Props
       await claimReceptionCall(entry, broker, split, getPlantaoTime().toISOString(), !referredBrokerId && entry.queue_type === 'geral');
       return;
     }
-    if (entry.visit?.visit_reason === 'Primeira visita') await markMeritReturns(brokers, broker, allQueue);
+    if (entry.visit && ['Primeira visita', SCHEDULED_REASON].includes(entry.visit.visit_reason)) await markMeritReturns(brokers, broker, allQueue);
     await updateEntryToCalling(entry, broker.id, referredBrokerId === null && entry.queue_type === 'geral');
-    if (broker && entry.visit?.visit_reason === 'Primeira visita') {
+    if (broker && entry.visit && ['Primeira visita', SCHEDULED_REASON].includes(entry.visit.visit_reason)) {
       await updateLastCalledAgency(broker.agency);
     }
   }

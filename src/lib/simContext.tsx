@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useLayoutEffect, useSyncExternalStore, type ReactNode } from 'react';
 import { scheduleAt, setScheduleClock, SHIFT_TIMES } from './queue/shiftSchedule';
 import { clockSnapshot, getPlantaoTime, plantaoClockParts, publishClock, subscribeClock } from './plantaoClock';
+import { dispatchClock, isDayExtended, subscribeDayExtension } from './operations/dayExtension';
 
 /** Read-only operational view of the clock, shared by every panel and engine adapter. */
 function useOperationalClock() {
@@ -16,13 +17,15 @@ function useOperationalClock() {
   }, []);
   useEffect(() => { try { localStorage.setItem('crm_is_holiday', String(isHoliday)); } catch { /* no storage */ } }, [isHoliday]);
   const isExtendedShift = isHoliday;
-  const schedule = scheduleAt({ seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate });
+  const cashSigning = useSyncExternalStore(subscribeDayExtension, () => isDayExtended(plantaoDate));
+  const operationSeconds = dispatchClock({ seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate }, cashSigning).seconds;
+  const schedule = scheduleAt({ seconds: operationSeconds, singleShift: isExtendedShift, date: plantaoDate });
   useLayoutEffect(() => {
-    setScheduleClock({ seconds: simSeconds, singleShift: isExtendedShift, date: plantaoDate });
+    setScheduleClock({ seconds: operationSeconds, singleShift: isExtendedShift, date: plantaoDate });
     return () => setScheduleClock(undefined);
-  }, [simSeconds, isExtendedShift, plantaoDate]);
+  }, [operationSeconds, isExtendedShift, plantaoDate]);
   return {
-    simSeconds, clockDisplay, plantaoDate, getCurrentTime: getPlantaoTime, callDuration,
+    simSeconds, operationSeconds, cashSigning, clockDisplay, plantaoDate, getCurrentTime: getPlantaoTime, callDuration,
     testMode: callDuration === 10, currentShift: schedule.shift, sorteioTriggered: schedule.morningDrawDue,
     isWeekday: !isExtendedShift, isHoliday, setIsHoliday, isExtendedShift,
     isPreSorteio: schedule.preOpening,

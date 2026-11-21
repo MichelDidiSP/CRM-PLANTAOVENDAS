@@ -66,6 +66,7 @@ function createSeedData(): Record<string, Row[]> {
       mk('Roberto Parceiro', 'Externo', 'Parcerias', true, 'Imobiliária ABC'),
     ],
     visits: [],
+    merit_indicator_events: [],
     incorporadora_direct_leads: [],
     plantao_daily_closures: [],
     queue_entries: [],

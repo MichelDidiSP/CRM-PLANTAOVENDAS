@@ -14,6 +14,7 @@ export type DirectLead = {
   created_at: string;
   shift: Shift;
   is_test?: boolean;
+  scheduled_time?: string | null;
 };
 
 export async function saveDirectLead(lead: DirectLead) {
